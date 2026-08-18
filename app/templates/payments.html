@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Ödemeler - Kredi Kartı Takip{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Ödeme Kayıtları</h1>
+</div>
+
+<div id="paymentsList" class="payments-list">
+    <div class="loading">Yükleniyor...</div>
+</div>
+
+<div id="emptyPayments" class="empty-state" style="display:none;">
+    <p>Henüz ödeme kaydı bulunmuyor.</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', loadPayments);
+
+async function loadPayments() {
+    try {
+        const res = await fetch('/api/payments');
+        const payments = await res.json();
+        const container = document.getElementById('paymentsList');
+        const emptyState = document.getElementById('emptyPayments');
+
+        if (payments.length === 0) {
+            container.style.display = 'none';
+            emptyState.style.display = 'block';
+            return;
+        }
+
+        container.innerHTML = payments.map(p => `
+            <div class="payment-item ${p.is_paid ? 'paid' : ''}">
+                <div class="payment-info">
+                    <span class="payment-card-name">${p.card_name}</span>
+                    <span class="payment-amount">${formatMoney(p.amount)}</span>
+                </div>
+                <div class="payment-meta">
+                    <span>Son Ödeme: ${p.due_date}</span>
+                    <span class="days-left ${getDaysClass(p.days_left)}">
+                        ${p.days_left > 0 ? p.days_left + ' gün kaldı' : 'Geçti'}
+                    </span>
+                </div>
+                <div class="payment-status">
+                    ${p.is_paid ?
+                        '<span class="badge badge-success">Ödendi</span>' :
+                        `<button class="btn btn-success btn-sm" onclick="markPaid(${p.id})">Ödendi İşaretle</button>`
+                    }
+                </div>
+            </div>
+        `).join('');
+
+    } catch (err) {
+        console.error('Ödeme listesi yükleme hatası:', err);
+    }
+}
+
+async function markPaid(paymentId) {
+    if (!confirm('Bu ödemeyi ödendi olarak işaretlemek istediğinize emin misiniz?')) return;
+
+    try {
+        const res = await fetch(`/api/payments/${paymentId}/paid`, { method: 'POST' });
+        if (res.ok) loadPayments();
+    } catch (err) {
+        console.error('Ödeme işaretleme hatası:', err);
+    }
+}
+
+function formatMoney(amount) {
+    return new Intl.NumberFormat('tr-TR', {
+        style: 'currency',
+        currency: 'TRY',
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0
+    }).format(amount);
+}
+
+function getDaysClass(days) {
+    if (days <= 2) return 'text-red';
+    if (days <= 7) return 'text-yellow';
+    return 'text-green';
+}
+</script>
+{% endblock %}

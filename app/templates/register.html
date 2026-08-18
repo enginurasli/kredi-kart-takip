@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Kayıt Ol - Kredi Kartı Takip{% endblock %}
+{% block content %}
+<div class="auth-container">
+    <div class="auth-card">
+        <h1>Kayıt Ol</h1>
+        <form method="POST">
+            <div class="form-group">
+                <label for="username">Kullanıcı Adı</label>
+                <input type="text" id="username" name="username" required autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label for="email">E-posta</label>
+                <input type="email" id="email" name="email" required autocomplete="email">
+            </div>
+            <div class="form-group">
+                <label for="password">Şifre</label>
+                <input type="password" id="password" name="password" required autocomplete="new-password">
+            </div>
+            <div class="form-group">
+                <label for="password2">Şifre Tekrar</label>
+                <input type="password" id="password2" name="password2" required autocomplete="new-password">
+            </div>
+            <button type="submit" class="btn btn-primary btn-full">Kayıt Ol</button>
+        </form>
+        <p class="auth-link">Zaten hesabınız var mı? <a href="{{ url_for('auth.login') }}">Giriş Yap</a></p>
+    </div>
+</div>
+{% endblock %}

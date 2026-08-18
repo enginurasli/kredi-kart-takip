@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Kartlarım - Kredi Kartı Takip{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Kartlarım</h1>
+    <a href="{{ url_for('main.new_card') }}" class="btn btn-primary">+ Yeni Kart</a>
+</div>
+
+<div id="cardsList" class="cards-grid">
+    <div class="loading">Yükleniyor...</div>
+</div>
+
+<div id="emptyCards" class="empty-state" style="display:none;">
+    <p>Henüz kart eklenmemiş.</p>
+    <a href="{{ url_for('main.new_card') }}" class="btn btn-primary">İlk Kartınızı Ekleyin</a>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', loadCards);
+
+async function loadCards() {
+    try {
+        const res = await fetch('/api/cards');
+        const cards = await res.json();
+        const container = document.getElementById('cardsList');
+        const emptyState = document.getElementById('emptyCards');
+
+        if (cards.length === 0) {
+            container.style.display = 'none';
+            emptyState.style.display = 'block';
+            return;
+        }
+
+        container.innerHTML = cards.map(card => `
+            <div class="card-item ${!card.is_active ? 'card-inactive' : ''}">
+                <div class="card-header">
+                    <span class="card-bank">${card.bank_name}</span>
+                    <span class="card-status ${card.is_active ? 'active' : 'inactive'}">
+                        ${card.is_active ? 'Aktif' : 'Pasif'}
+                    </span>
+                </div>
+                <div class="card-name">${card.card_name}</div>
+                <div class="card-balance">${formatMoney(card.current_balance)}</div>
+                <div class="card-details">
+                    <span>Kesim: ${card.statement_day}</span>
+                    <span>Son Ödeme: ${card.due_day}</span>
+                </div>
+                <div class="card-actions">
+                    <a href="/cards/${card.id}" class="btn btn-sm">Detay</a>
+                    <a href="/cards/${card.id}/edit" class="btn btn-sm btn-secondary">Düzenle</a>
+                    <button class="btn btn-sm btn-danger" onclick="deleteCard(${card.id})">Sil</button>
+                </div>
+            </div>
+        `).join('');
+
+    } catch (err) {
+        console.error('Kart listesi yükleme hatası:', err);
+    }
+}
+
+async function deleteCard(cardId) {
+    if (!confirm('Bu kartı silmek istediğinize emin misiniz? Tüm ödeme geçmişi de silinecektir.')) return;
+
+    try {
+        const res = await fetch(`/api/cards/${cardId}`, { method: 'DELETE' });
+        if (res.ok) loadCards();
+    } catch (err) {
+        console.error('Kart silme hatası:', err);
+    }
+}
+
+function formatMoney(amount) {
+    return new Intl.NumberFormat('tr-TR', {
+        style: 'currency',
+        currency: 'TRY',
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0
+    }).format(amount);
+}
+</script>
+{% endblock %}

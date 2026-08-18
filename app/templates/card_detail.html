@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Kart Detayı - Kredi Kartı Takip{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1 id="cardTitle">Kart Detayı</h1>
+    <div class="header-actions">
+        <a id="editLink" href="#" class="btn btn-secondary">Düzenle</a>
+        <button class="btn btn-danger" onclick="deleteCard()">Sil</button>
+    </div>
+</div>
+
+<div id="cardDetail" class="card-detail">
+    <div class="loading">Yükleniyor...</div>
+</div>
+
+<div class="section-header">
+    <h2>Ödeme Geçmişi</h2>
+</div>
+
+<div id="paymentHistory" class="payments-list">
+    <div class="loading">Yükleniyor...</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const cardId = {{ card_id|tojson }};
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadCardDetail();
+    loadPaymentHistory();
+});
+
+async function loadCardDetail() {
+    try {
+        const res = await fetch(`/api/cards/${cardId}`);
+        const card = await res.json();
+
+        document.getElementById('cardTitle').textContent = card.full_name;
+        document.getElementById('editLink').href = `/cards/${cardId}/edit`;
+
+        document.getElementById('cardDetail').innerHTML = `
+            <div class="detail-grid">
+                <div class="detail-item">
+                    <span class="detail-label">Banka</span>
+                    <span class="detail-value">${card.bank_name}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">Kart</span>
+                    <span class="detail-value">${card.card_name}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">Hesap Kesim</span>
+                    <span class="detail-value">Her ayın ${card.statement_day}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">Son Ödeme</span>
+                    <span class="detail-value">Her ayın ${card.due_day}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">Güncel Borç</span>
+                    <span class="detail-value highlight">${formatMoney(card.current_balance)}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">Para Birimi</span>
+                    <span class="detail-value">${card.currency}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">Hatırlatma</span>
+                    <span class="detail-value">${card.reminder_days} gün önce</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">Durum</span>
+                    <span class="detail-value ${card.is_active ? 'text-green' : 'text-red'}">
+                        ${card.is_active ? 'Aktif' : 'Pasif'}
+                    </span>
+                </div>
+            </div>
+            ${card.note ? `<div class="detail-note"><strong>Not:</strong> ${card.note}</div>` : ''}
+        `;
+    } catch (err) {
+        console.error('Kart yükleme hatası:', err);
+    }
+}
+
+async function loadPaymentHistory() {
+    try {
+        const res = await fetch('/api/payments');
+        const payments = await res.json();
+        const cardPayments = payments.filter(p => p.card_id == cardId);
+        const container = document.getElementById('paymentHistory');
+
+        if (cardPayments.length === 0) {
+            container.innerHTML = '<p class="text-muted">Henüz ödeme kaydı yok.</p>';
+            return;
+        }
+
+        container.innerHTML = cardPayments.map(p => `
+            <div class="payment-item ${p.is_paid ? 'paid' : ''}">
+                <div class="payment-info">
+                    <span class="payment-month">${p.month}/${p.year}</span>
+                    <span class="payment-amount">${formatMoney(p.amount)}</span>
+                </div>
+                <div class="payment-meta">
+                    <span>Son Ödeme: ${p.due_date}</span>
+                    <span class="${p.is_paid ? 'text-green' : 'text-red'}">
+                        ${p.is_paid ? '✓ Ödendi' : 'Ödenmedi'}
+                    </span>
+                </div>
+            </div>
+        `).join('');
+    } catch (err) {
+        console.error('Ödeme geçmişi yükleme hatası:', err);
+    }
+}
+
+async function deleteCard() {
+    if (!confirm('Bu kartı silmek istediğinize emin misiniz?')) return;
+
+    try {
+        const res = await fetch(`/api/cards/${cardId}`, { method: 'DELETE' });
+        if (res.ok) window.location.href = '/cards';
+    } catch (err) {
+        console.error('Kart silme hatası:', err);
+    }
+}
+
+function formatMoney(amount) {
+    return new Intl.NumberFormat('tr-TR', {
+        style: 'currency',
+        currency: 'TRY',
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0
+    }).format(amount);
+}
+</script>
+{% endblock %}

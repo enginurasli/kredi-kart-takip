@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Giriş Yap - Kredi Kartı Takip{% endblock %}
+{% block content %}
+<div class="auth-container">
+    <div class="auth-card">
+        <h1>Giriş Yap</h1>
+        <form method="POST">
+            <div class="form-group">
+                <label for="username">Kullanıcı Adı</label>
+                <input type="text" id="username" name="username" required autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label for="password">Şifre</label>
+                <input type="password" id="password" name="password" required autocomplete="current-password">
+            </div>
+            <button type="submit" class="btn btn-primary btn-full">Giriş Yap</button>
+        </form>
+        <p class="auth-link">Hesabınız yok mu? <a href="{{ url_for('auth.register') }}">Kayıt Ol</a></p>
+    </div>
+</div>
+{% endblock %}

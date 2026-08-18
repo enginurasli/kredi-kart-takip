@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}Bildirimler - Kredi Karti Takip{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Bildirimler</h1>
+</div>
+
+<div class="notification-actions">
+    <div id="subscriptionStatus" class="status-bar">
+        <span id="statusText">Kontrol ediliyor...</span>
+        <button id="subscribeBtn" class="btn btn-primary" onclick="toggleSubscription()" style="display:none;">
+            Bildirimleri Ac
+        </button>
+        <button id="testBtn" class="btn btn-secondary" onclick="sendTest()">Test Bildirimi Gonder</button>
+    </div>
+    <div id="errorBox" style="display:none; margin-top:8px; padding:12px; background:#fce8e6; border-radius:8px; color:#c5221f; font-size:0.9rem;"></div>
+    <div id="successBox" style="display:none; margin-top:8px; padding:12px; background:#e6f4ea; border-radius:8px; color:#137333; font-size:0.9rem;"></div>
+</div>
+
+<div id="notificationsList" class="notifications-list">
+    <div class="loading">Yukleniyor...</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', async function() {
+    await updateUI();
+    checkAndShowNotifications();
+});
+
+function showError(msg) {
+    document.getElementById('successBox').style.display = 'none';
+    const box = document.getElementById('errorBox');
+    box.textContent = msg;
+    box.style.display = msg ? 'block' : 'none';
+}
+
+function showSuccess(msg) {
+    document.getElementById('errorBox').style.display = 'none';
+    const box = document.getElementById('successBox');
+    box.textContent = msg;
+    box.style.display = msg ? 'block' : 'none';
+}
+
+async function updateUI() {
+    const statusText = document.getElementById('statusText');
+    const btn = document.getElementById('subscribeBtn');
+
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        statusText.textContent = 'Tarayiciniz bildirim desteklemiyor';
+        statusText.className = 'text-red';
+        btn.style.display = 'none';
+        return;
+    }
+
+    try {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+
+        if (sub) {
+            statusText.textContent = 'Bildirimler acik';
+            statusText.className = 'text-green';
+            btn.textContent = 'Bildirimleri Kapat';
+            btn.className = 'btn btn-danger';
+        } else {
+            statusText.textContent = 'Bildirimler kapali';
+            statusText.className = 'text-red';
+            btn.textContent = 'Bildirimleri Ac';
+            btn.className = 'btn btn-primary';
+        }
+        btn.style.display = 'inline-block';
+    } catch(e) {
+        statusText.textContent = 'Hata: ' + e.message;
+        statusText.className = 'text-red';
+    }
+}
+
+async function toggleSubscription() {
+    const btn = document.getElementById('subscribeBtn');
+    btn.disabled = true;
+    showError('');
+    showSuccess('');
+
+    try {
+        const reg = await navigator.serviceWorker.ready;
+        const oldSub = await reg.pushManager.getSubscription();
+
+        if (oldSub) {
+            await oldSub.unsubscribe();
+            await fetch('/api/unsubscribe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ endpoint: oldSub.endpoint }),
+            });
+            showSuccess('Bildirimler kapatildi.');
+            await updateUI();
+            btn.disabled = false;
+            return;
+        }
+
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') {
+            showError('Bildirim izni verilmedi.');
+            btn.disabled = false;
+            return;
+        }
+
+        const keyRes = await fetch('/api/vapid-public-key');
+        const keyData = await keyRes.json();
+        const appKey = urlBase64ToUint8Array(keyData.public_key);
+
+        const sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: appKey,
+        });
+
+        const res = await fetch('/api/subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                subscription: sub.toJSON(),
+                device_name: getDeviceName(),
+            }),
+        });
+
+        if (res.ok) {
+            showSuccess('Bildirimler basariyla acildi!');
+        } else {
+            const err = await res.json();
+            showError('Hata: ' + (err.error || 'Bilinmeyen'));
+        }
+
+        await updateUI();
+    } catch(e) {
+        showError('Hata: ' + e.message);
+    }
+
+    btn.disabled = false;
+}
+
+async function sendTest() {
+    const btn = document.getElementById('testBtn');
+    btn.disabled = true;
+
+    try {
+        const res = await fetch('/api/notifications/0/send-test', { method: 'POST' });
+        const data = await res.json();
+        showSuccess(data.message || 'Test gonderildi');
+    } catch(e) {
+        showError('Test gonderilemedi: ' + e.message);
+    }
+
+    btn.disabled = false;
+}
+</script>
+{% endblock %}

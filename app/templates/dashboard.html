@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Ana Sayfa - Kredi Kartı Takip{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Kredi Kartlarım</h1>
+    <p class="date-display" id="todayDate"></p>
+</div>
+
+<div class="summary-cards" id="summaryCards">
+    <div class="summary-card">
+        <div class="summary-label">Yaklaşan Ödeme</div>
+        <div class="summary-value" id="nextPayment">-</div>
+    </div>
+    <div class="summary-card">
+        <div class="summary-label">Bu Ay Toplam</div>
+        <div class="summary-value" id="totalAmount">-</div>
+    </div>
+    <div class="summary-card">
+        <div class="summary-label">Ödenmemiş</div>
+        <div class="summary-value" id="unpaidCount">-</div>
+    </div>
+</div>
+
+<div class="section-header">
+    <h2>Yaklaşan Ödemeler</h2>
+</div>
+
+<div id="upcomingPayments" class="payments-list">
+    <div class="loading">Yükleniyor...</div>
+</div>
+
+<div id="emptyState" class="empty-state" style="display:none;">
+    <p>Henüz ödeme bulunmuyor.</p>
+    <a href="{{ url_for('main.new_card') }}" class="btn btn-primary">İlk Kartınızı Ekleyin</a>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadDashboard();
+});
+
+async function loadDashboard() {
+    try {
+        const [dashboardRes, upcomingRes] = await Promise.all([
+            fetch('/api/dashboard'),
+            fetch('/api/payments/upcoming')
+        ]);
+
+        const dashboard = await dashboardRes.json();
+        const upcoming = await upcomingRes.json();
+
+        document.getElementById('todayDate').textContent = dashboard.today;
+        document.getElementById('totalAmount').textContent = formatMoney(dashboard.total_month);
+        document.getElementById('unpaidCount').textContent = dashboard.unpaid_count + ' ödeme';
+
+        if (dashboard.next_payment) {
+            document.getElementById('nextPayment').textContent =
+                dashboard.next_payment.days_left + ' gün';
+        } else {
+            document.getElementById('nextPayment').textContent = '-';
+        }
+
+        const container = document.getElementById('upcomingPayments');
+        const emptyState = document.getElementById('emptyState');
+
+        if (upcoming.length === 0) {
+            container.style.display = 'none';
+            emptyState.style.display = 'block';
+            return;
+        }
+
+        container.innerHTML = upcoming.map(item => `
+            <div class="payment-card status-${item.status_color}">
+                <div class="payment-header">
+                    <span class="status-dot status-${item.status_color}"></span>
+                    <span class="days-left">${item.days_left} gün kaldı</span>
+                </div>
+                <div class="payment-card-name">${item.card_name}</div>
+                <div class="payment-amount">${formatMoney(item.amount)}</div>
+                <div class="payment-due">Son ödeme: ${item.due_date_tr}</div>
+                ${item.is_paid ? '<div class="payment-paid-badge">✓ Ödendi</div>' : ''}
+                ${!item.is_paid ? `
+                <button class="btn btn-success btn-sm" onclick="markPaid(${item.payment_id})">
+                    Ödendi İşaretle
+                </button>
+                ` : ''}
+            </div>
+        `).join('');
+
+    } catch (err) {
+        console.error('Dashboard yükleme hatası:', err);
+    }
+}
+
+async function markPaid(paymentId) {
+    if (!confirm('Bu ödemeyi ödendi olarak işaretlemek istediğinize emin misiniz?')) return;
+
+    try {
+        const res = await fetch(`/api/payments/${paymentId}/paid`, { method: 'POST' });
+        if (res.ok) {
+            loadDashboard();
+        }
+    } catch (err) {
+        console.error('Ödeme işaretleme hatası:', err);
+    }
+}
+
+function formatMoney(amount) {
+    return new Intl.NumberFormat('tr-TR', {
+        style: 'currency',
+        currency: 'TRY',
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0
+    }).format(amount);
+}
+</script>
+{% endblock %}
