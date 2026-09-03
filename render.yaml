@@ -7,3 +7,8 @@ services:
     envVars:
       - key: SECRET_KEY
         generateValue: true
+
+databases:
+  - name: kredi-kart-takip-db
+    plan: free
+    databaseName: kredi_kart_takip
