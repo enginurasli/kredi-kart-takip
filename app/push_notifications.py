@@ -3,6 +3,7 @@ from pywebpush import webpush, WebPushException
 from app.models import Device, Notification, Card, Payment
 from app.vapid_keys import get_private_key_der_b64
 from app import db
+from datetime import datetime, UTC
 
 
 VAPID_CLAIMS = {
@@ -73,7 +74,7 @@ def send_payment_reminder(notification_id):
     if sent_count > 0:
         from datetime import datetime
         notification.status = "sent"
-        notification.sent_at = datetime.utcnow()
+        notification.sent_at = datetime.now(UTC)
         notification.message = body
         db.session.commit()
 

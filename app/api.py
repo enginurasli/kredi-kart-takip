@@ -1,7 +1,7 @@
 import json
 from flask import Blueprint, jsonify, request
 from flask_login import login_required, current_user
-from datetime import date, datetime
+from datetime import date, datetime, UTC
 from app import db
 from app.models import Card, Payment, Notification, Setting, Device
 from app.date_utils import (
@@ -208,7 +208,7 @@ def mark_payment_paid(payment_id):
         return jsonify({"error": "Ödeme bulunamadı"}), 404
 
     payment.is_paid = True
-    payment.paid_at = datetime.utcnow()
+    payment.paid_at = datetime.now(UTC)
 
     Notification.query.filter_by(
         payment_id=payment.id,

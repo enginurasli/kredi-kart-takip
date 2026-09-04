@@ -1,4 +1,4 @@
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, UTC
 from app import db
 from app.models import Payment, Notification, Card
 
@@ -41,7 +41,7 @@ def create_payment_notification(payment, reminder_days=2):
 
 
 def get_pending_notifications(user_id):
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     return Notification.query.filter(
         Notification.user_id == user_id,
         Notification.status == "pending",
@@ -59,7 +59,7 @@ def dismiss_notification(notification_id, user_id):
         return False
 
     notification.status = "dismissed"
-    notification.dismissed_at = datetime.utcnow()
+    notification.dismissed_at = datetime.now(UTC)
     db.session.commit()
     return True
 

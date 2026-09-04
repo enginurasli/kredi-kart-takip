@@ -1,5 +1,5 @@
 from apscheduler.schedulers.background import BackgroundScheduler
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, UTC
 from app import db
 from app.models import Card, Notification
 from app.notifications import generate_notifications_for_upcoming_payments
@@ -23,7 +23,7 @@ def check_upcoming_payments():
         from app.push_notifications import send_payment_reminder
         pending = Notification.query.filter(
             Notification.status == "pending",
-            Notification.scheduled_at <= datetime.utcnow(),
+            Notification.scheduled_at <= datetime.now(UTC),
         ).all()
 
         for notif in pending:
