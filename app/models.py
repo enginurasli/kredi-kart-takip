@@ -1,4 +1,4 @@
-from datetime import datetime, date
+from datetime import datetime, date, UTC
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_login import UserMixin
 from app import db, login_manager
@@ -11,7 +11,7 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now(UTC))
 
     cards = db.relationship("Card", backref="user", lazy=True, cascade="all, delete-orphan")
     devices = db.relationship("Device", backref="user", lazy=True, cascade="all, delete-orphan")
@@ -38,7 +38,7 @@ class Card(db.Model):
     reminder_days = db.Column(db.Integer, default=2)
     is_active = db.Column(db.Boolean, default=True)
     note = db.Column(db.Text, default="")
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now(UTC))
 
     payments = db.relationship("Payment", backref="card", lazy=True, cascade="all, delete-orphan")
 
@@ -76,7 +76,7 @@ class Payment(db.Model):
     paid_at = db.Column(db.DateTime, nullable=True)
     month = db.Column(db.Integer, nullable=False)
     year = db.Column(db.Integer, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now(UTC))
 
     notifications = db.relationship("Notification", backref="payment", lazy=True, cascade="all, delete-orphan")
 
@@ -108,7 +108,7 @@ class Notification(db.Model):
     scheduled_at = db.Column(db.DateTime, nullable=False)
     sent_at = db.Column(db.DateTime, nullable=True)
     dismissed_at = db.Column(db.DateTime, nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now(UTC))
 
     def to_dict(self):
         return {
@@ -133,7 +133,7 @@ class Device(db.Model):
     name = db.Column(db.String(100), nullable=False)
     push_subscription = db.Column(db.Text, nullable=True)
     is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now(UTC))
 
 
 class Setting(db.Model):
@@ -146,9 +146,9 @@ class Setting(db.Model):
     currency = db.Column(db.String(10), default="TRY")
     notification_sound = db.Column(db.String(50), default="default")
     theme = db.Column(db.String(20), default="light")
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now(UTC))
 
 
 @login_manager.user_loader
 def load_user(user_id):
-    return User.query.get(int(user_id))
+    return db.session.get(User, int(user_id))

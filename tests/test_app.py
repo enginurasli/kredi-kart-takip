@@ -397,7 +397,7 @@ class TestNotifications:
             result = dismiss_notification(notif.id, user.id)
             assert result is True
 
-            updated = Notification.query.get(notif.id)
+            updated = db.session.get(Notification, notif.id)
             assert updated.status == 'dismissed'
             assert updated.dismissed_at is not None
 

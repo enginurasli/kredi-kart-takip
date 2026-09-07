@@ -36,18 +36,18 @@ def send_push_notification(device, title, body, url="/"):
 
 
 def send_payment_reminder(notification_id):
-    notification = Notification.query.get(notification_id)
+    notification = db.session.get(Notification, notification_id)
     if not notification or notification.status != "pending":
         return False
 
     if notification.sent_at is not None:
         return False
 
-    payment = Payment.query.get(notification.payment_id)
+    payment = db.session.get(Payment, notification.payment_id)
     if not payment:
         return False
 
-    card = Card.query.get(payment.card_id)
+    card = db.session.get(Card, payment.card_id)
     if not card:
         return False
 
@@ -72,7 +72,6 @@ def send_payment_reminder(notification_id):
             sent_count += 1
 
     if sent_count > 0:
-        from datetime import datetime
         notification.status = "sent"
         notification.sent_at = datetime.now(UTC)
         notification.message = body

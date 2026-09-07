@@ -12,7 +12,7 @@ def create_payment_notification(payment, reminder_days=2):
     if existing:
         return None
 
-    card = Card.query.get(payment.card_id)
+    card = db.session.get(Card, payment.card_id)
     scheduled_date = payment.due_date - timedelta(days=reminder_days)
 
     if scheduled_date < date.today():

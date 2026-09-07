@@ -226,9 +226,9 @@ def get_notifications():
     result = []
     for n in notifications:
         d = n.to_dict()
-        payment = Payment.query.get(n.payment_id)
+        payment = db.session.get(Payment, n.payment_id)
         if payment:
-            card = Card.query.get(payment.card_id)
+            card = db.session.get(Card, payment.card_id)
             d["card_name"] = card.full_name if card else ""
             d["amount"] = payment.amount
             d["currency"] = payment.currency
@@ -390,7 +390,7 @@ def unsubscribe():
             if sub.get("endpoint") == endpoint:
                 device = d
                 break
-        except:
+        except (ValueError, TypeError, json.JSONDecodeError):
             continue
 
     if device:
