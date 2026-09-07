@@ -16,6 +16,7 @@
             <button type="submit" class="btn btn-primary btn-full">Giriş Yap</button>
         </form>
         <p class="auth-link">Hesabınız yok mu? <a href="{{ url_for('auth.register') }}">Kayıt Ol</a></p>
+        <p class="auth-link"><a href="{{ url_for('auth.forgot_password') }}">Şifremi unuttum</a></p>
     </div>
 </div>
 {% endblock %}

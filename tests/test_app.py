@@ -170,6 +170,49 @@ class TestAuth:
         assert response.status_code == 200
 
 
+    def test_password_reset_flow(self, client):
+        client.post('/register', data={
+            'username': 'resetuser',
+            'email': 'reset@test.com',
+            'password': 'oldpass123',
+            'password2': 'oldpass123'
+        }, follow_redirects=True)
+
+        response = client.post('/forgot-password', data={
+            'username': 'resetuser',
+            'email': 'reset@test.com'
+        }, follow_redirects=True)
+        assert response.status_code == 200
+
+        response = client.post('/reset-password', data={
+            'password': 'newpass123',
+            'password2': 'newpass123'
+        }, follow_redirects=True)
+        assert response.status_code == 200
+
+        client.get('/logout', follow_redirects=True)
+        response = client.post('/login', data={
+            'username': 'resetuser',
+            'password': 'newpass123'
+        }, follow_redirects=True)
+        assert response.status_code == 200
+
+
+    def test_password_reset_wrong_email(self, client):
+        client.post('/register', data={
+            'username': 'resetuser2',
+            'email': 'reset2@test.com',
+            'password': 'oldpass123',
+            'password2': 'oldpass123'
+        }, follow_redirects=True)
+
+        response = client.post('/forgot-password', data={
+            'username': 'resetuser2',
+            'email': 'yanlis@test.com'
+        }, follow_redirects=True)
+        assert response.status_code == 200
+
+
 class TestCardCRUD:
     def test_create_card(self, auth_client):
         response = auth_client.post('/api/cards',
