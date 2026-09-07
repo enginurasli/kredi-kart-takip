@@ -1,8 +1,9 @@
-const CACHE_NAME = 'kart-takip-v3';
+const CACHE_NAME = 'kart-takip-v4';
 const urlsToCache = [
-    '/',
     '/static/css/style.css',
     '/static/js/app.js',
+    '/static/icons/icon-192.png',
+    '/static/icons/icon-512.png',
     '/static/sounds/notification.wav'
 ];
 
@@ -26,13 +27,50 @@ self.addEventListener('activate', event => {
     self.clients.claim();
 });
 
+function isStaticAsset(url) {
+    return url.pathname.startsWith('/static/');
+}
+
+function isApiRequest(url) {
+    return url.pathname.startsWith('/api/');
+}
+
 self.addEventListener('fetch', event => {
+    const request = event.request;
+    const url = new URL(request.url);
+
+    if (request.method !== 'GET' || url.origin !== self.location.origin) {
+        return;
+    }
+
     event.respondWith(
-        caches.match(event.request)
-            .then(response => {
-                if (response) return response;
-                return fetch(event.request);
-            })
+        (async () => {
+            if (isApiRequest(url)) {
+                return fetch(request);
+            }
+
+            if (isStaticAsset(url)) {
+                const cached = await caches.match(request);
+                if (cached) return cached;
+                const network = await fetch(request);
+                if (network && network.ok) {
+                    const copy = network.clone();
+                    caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
+                }
+                return network;
+            }
+
+            const network = await fetch(request).catch(() => null);
+            if (network && network.ok) {
+                const copy = network.clone();
+                caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
+                return network;
+            }
+
+            const cached = await caches.match(request);
+            if (cached) return cached;
+            return fetch(request);
+        })()
     );
 });
 
