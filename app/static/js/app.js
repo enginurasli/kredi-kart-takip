@@ -88,6 +88,11 @@ async function subscribeToPush() {
             }),
         });
 
+        if (res.status === 401) {
+            console.error('Oturum sona erdi, giris yapmaniz gerekiyor.');
+            return false;
+        }
+
         if (res.ok) {
             console.log('Push aboneligi basarili');
             return true;
@@ -145,7 +150,23 @@ async function isSubscribed() {
 async function sendTestNotification() {
     try {
         const res = await fetch('/api/notifications/0/send-test', { method: 'POST' });
-        const data = await res.json();
+
+        if (!res.ok) {
+            if (res.status === 401) {
+                alert('Oturumunuz sona erdi. Sayfayi yenileyip tekrar giris yapin.');
+            } else {
+                alert('Test bildirimi gonderilemedi (HTTP ' + res.status + ')');
+            }
+            return;
+        }
+
+        let data;
+        try {
+            data = await res.json();
+        } catch(e) {
+            alert('Beklenmeyen yanit. Oturumunuz sona ermis olabilir.');
+            return;
+        }
         alert(data.message || 'Test bildirimi gonderildi');
     } catch (err) {
         alert('Test bildirimi gonderilemedi');

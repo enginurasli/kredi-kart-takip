@@ -124,11 +124,22 @@ async function toggleSubscription() {
             }),
         });
 
+        if (res.status === 401) {
+            showError('Oturumunuz sona ermis. Sayfayi yenileyip tekrar giris yapin.');
+            await updateUI();
+            btn.disabled = false;
+            return;
+        }
+
         if (res.ok) {
             showSuccess('Bildirimler basariyla acildi!');
         } else {
-            const err = await res.json();
-            showError('Hata: ' + (err.error || 'Bilinmeyen'));
+            let errMsg = 'Bilinmeyen hata';
+            try {
+                const err = await res.json();
+                errMsg = err.error || errMsg;
+            } catch(e) {}
+            showError('Hata: ' + errMsg);
         }
 
         await updateUI();
@@ -145,7 +156,18 @@ async function sendTest() {
 
     try {
         const res = await fetch('/api/notifications/0/send-test', { method: 'POST' });
-        const data = await res.json();
+
+        if (!res.ok) {
+            throw new Error('Sunucu hatasi (HTTP ' + res.status + ')');
+        }
+
+        let data;
+        try {
+            data = await res.json();
+        } catch(e) {
+            throw new Error('Beklenmeyen yanit alindi. Oturumunuz sona ermis olabilir, sayfayi yenileyip tekrar giris yapin.');
+        }
+
         showSuccess(data.message || 'Test gonderildi');
     } catch(e) {
         showError('Test gonderilemedi: ' + e.message);
