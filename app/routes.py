@@ -54,4 +54,11 @@ def notifications():
 
 @main_bp.route("/sw.js")
 def service_worker():
-    return send_from_directory("static/js", "sw.js", mimetype="application/javascript")
+    response = send_from_directory(
+        "static/js", "sw.js", mimetype="application/javascript"
+    )
+    # Tarayıcı yeni service worker'i yalnızca bu dosya değiştiğinde indirir.
+    # Önbelleklenirse telefon deploy sonrası eski sürümde kalır.
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    return response

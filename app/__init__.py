@@ -125,6 +125,12 @@ def create_app(config_class=Config):
     if not app.secret_key:
         raise RuntimeError("SECRET_KEY ayarlanmalı")
 
+    # Render ve benzeri ters vekil arkasında uygulama HTTP görür; bu olmadan
+    # şifre sıfırlama bağlantısı http:// üretilir ve tarayıcıda kararsız çalışır.
+    if app.config.get("TRUST_PROXY", True):
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
     if app.config.get("SQLALCHEMY_DATABASE_URI", "").startswith("sqlite:///"):
         _configure_sqlite()
 

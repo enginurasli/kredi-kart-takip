@@ -16,6 +16,10 @@ KEYS_FILE = os.environ.get(
 )
 _LEGACY_KEYS_FILE = os.path.join(os.path.dirname(__file__), "instance", "vapid_keys.json")
 
+# Uygulama süreci boyunca okunan anahtar. Her çağrıda yeniden üretilirse
+# Render gibi geçici diskte her restart yeni anahtar demektir.
+_cached_keys = None
+
 
 def _write_keys(keys):
     directory = os.path.dirname(KEYS_FILE) or "."
@@ -59,11 +63,7 @@ def _keys_from_env():
     return keys
 
 
-def get_vapid_keys():
-    env_keys = _keys_from_env()
-    if env_keys is not None:
-        return env_keys
-
+def _load_keys():
     with _key_lock:
         current_path = os.path.abspath(KEYS_FILE)
         legacy_path = os.path.abspath(_LEGACY_KEYS_FILE)
@@ -90,6 +90,96 @@ def get_vapid_keys():
             "public_key": public_key_b64,
         }
         _write_keys(keys)
+        return keys
+
+
+def _load_keys_from_db():
+    """VAPID anahtarlarını veritabanından okur.
+
+    Render gibi platformlarda dosya sistemi her deploy'da sıfırlandığı için
+    diskteki anahtar kaybolur. Veritabanı kalıcı olduğundan anahtar orada
+    saklanır; anahtar değişirse tarayıcıdaki push abonelikleri geçersizleşir.
+    """
+    try:
+        from app import db
+        from app.models import AppSetting
+    except Exception:
+        return None
+
+    try:
+        row = AppSetting.query.filter_by(key="vapid_keys").first()
+    except Exception:
+        # Tablo henüz yoksa veya bağlantı yoksa sessizce vazgeç.
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        return None
+
+    if row is None or not row.value:
+        return None
+
+    try:
+        keys = json.loads(row.value)
+    except (TypeError, ValueError):
+        return None
+    if not keys.get("private_key") or not keys.get("public_key"):
+        return None
+    return keys
+
+
+def _save_keys_to_db(keys):
+    try:
+        from app import db
+        from app.models import AppSetting
+        from sqlalchemy.exc import SQLAlchemyError
+    except Exception:
+        return
+
+    try:
+        row = AppSetting.query.filter_by(key="vapid_keys").first()
+        if row is None:
+            row = AppSetting(key="vapid_keys", value=json.dumps(keys))
+            db.session.add(row)
+        else:
+            row.value = json.dumps(keys)
+        db.session.commit()
+    except SQLAlchemyError:
+        db.session.rollback()
+
+
+def get_vapid_keys():
+    global _cached_keys
+    env_keys = _keys_from_env()
+    if env_keys is not None:
+        return env_keys
+
+    with _key_lock:
+        if _cached_keys is not None:
+            return _cached_keys
+
+        keys = _load_keys_from_db()
+        if keys is None:
+            try:
+                keys = _load_keys()
+            except OSError:
+                # Disk yazılabilir değilse (salt-okunur konteyner) yine de
+                # çalışır; anahtar sadece bu süreç boyunca geçerli olur.
+                vapid = Vapid()
+                vapid.generate_keys()
+                public_key_raw = vapid.public_key.public_bytes(
+                    Encoding.X962,
+                    PublicFormat.UncompressedPoint,
+                )
+                keys = {
+                    "private_key": vapid.private_pem().decode("utf-8"),
+                    "public_key": base64.urlsafe_b64encode(
+                        public_key_raw,
+                    ).rstrip(b"=").decode("utf-8"),
+                }
+
+        _save_keys_to_db(keys)
+        _cached_keys = keys
         return keys
 
 

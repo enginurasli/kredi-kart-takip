@@ -52,11 +52,27 @@ if ('serviceWorker' in navigator) {
             .then(reg => console.log('Service Worker kayitli, scope:', reg.scope))
             .catch(err => console.log('Service Worker hatasi:', err));
 
+        // Yeni sürüm kurulduğında açık sekmeleri bir kez yenileyerek
+        // eski HTML/JS ile yeni backend arasında kalıcı uyumsuzluğu önler.
+        let refreshing = false;
+        navigator.serviceWorker.addEventListener('controllerchange', function() {
+            if (refreshing) return;
+            refreshing = true;
+            window.location.reload();
+        });
+
         navigator.serviceWorker.addEventListener('message', event => {
             if (event.data && event.data.type === 'PLAY_SOUND') {
                 playNotificationSound(event.data.sound);
             }
         });
+
+        // Sayfa her açıldığında güncelleme kontrolü yap.
+        if (navigator.serviceWorker.controller) {
+            navigator.serviceWorker.getRegistration().then(reg => {
+                if (reg) reg.update();
+            }).catch(() => {});
+        }
     });
 }
 

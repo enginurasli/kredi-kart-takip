@@ -22,6 +22,7 @@ class TestConfig:
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
     SECRET_KEY = 'test-secret'
     ENABLE_SCHEDULER = False
+    TRUST_PROXY = False
 
 
 @pytest.fixture
@@ -859,6 +860,76 @@ class TestTemplateScripts:
         assert response.status_code == 200
         assert b'loadDashboard' in response.data
 
+    def test_service_worker_served_without_caching(self, client):
+        """Render yeniden deploy edince telefon eski sürümde kalmasın."""
+        response = client.get('/sw.js')
+        assert response.status_code == 200
+        assert 'javascript' in response.headers['Content-Type']
+        assert 'no-cache' in response.headers.get('Cache-Control', ''), (
+            "sw.js no-cache olmazsa tarayıcı yeni service worker'i hiç indirmez"
+        )
+
+
+class TestServiceWorkerStaleness:
+    """KOD10: Eski service worker yeni kodun görünmesini engellemesin."""
+
+    @staticmethod
+    def _sw_source():
+        import pathlib
+        path = pathlib.Path(__file__).resolve().parent.parent / 'app' / 'static' / 'js' / 'sw.js'
+        return path.read_text(encoding='utf-8')
+
+    @staticmethod
+    def _app_source():
+        import pathlib
+        path = pathlib.Path(__file__).resolve().parent.parent / 'app' / 'static' / 'js' / 'app.js'
+        return path.read_text(encoding='utf-8')
+
+    def test_cache_name_bumped(self):
+        """Cache adı değişmeden eski varlıklar temizlenmez."""
+        import re
+        source = self._sw_source()
+        match = re.search(r"CACHE_NAME\s*=\s*'([^']+)'", source)
+        assert match, 'CACHE_NAME tanimli degil'
+        assert match.group(1) == 'kart-takip-v5', (
+            f"Cache adi {match.group(1)}; varliklarin yenilenmesi icin artirilmali"
+        )
+
+    def test_install_calls_skip_waiting(self):
+        install_block = self._sw_source().split("addEventListener('install'")[1]
+        assert 'skipWaiting' in install_block.split("addEventListener('activate'")[0], (
+            'install icinde skipWaiting yok; yeni SW beklemede kalir'
+        )
+
+    def test_static_assets_prefer_network(self):
+        """Static varliklar onbellekten sunulmamali, aksi halde eski JS kalir."""
+        source = self._sw_source()
+        static_handler = source.split('if (isStaticAsset(url)) {')[1]
+        # İlk dönüş ağdan gelen yanıt olmalı; önbellek yalnızca ağ başarısızsa.
+        assert 'const network = await fetch(request);' in static_handler
+        assert 'if (cached) return cached;' in static_handler
+        assert static_handler.index('const network = await fetch(request);') < \
+            static_handler.index('if (cached) return cached;')
+
+    def test_activate_claims_clients(self):
+        activate_block = self._sw_source().split("addEventListener('activate'")[1]
+        assert 'clients.claim' in activate_block, (
+            'activate icinde clients.claim yok; acik sekmeler yeni SW ile baglanmaz'
+        )
+
+    def test_app_reloads_on_controller_change(self):
+        source = self._app_source()
+        assert "addEventListener('controllerchange'" in source, (
+            'controllerchange dinleyicisi yok; eski sayfa yeni kodla baglanmaz'
+        )
+        assert 'window.location.reload()' in source
+
+    def test_app_checks_for_updates_on_load(self):
+        source = self._app_source()
+        assert 'reg.update()' in source, (
+            'reg.update() cagrisi yok; acik sekme yeni surumu kontrol etmez'
+        )
+
 
 class TestPushKeyDurability:
     """KOD7: VAPID anahtarı ortam değişkeninden okunabilmeli (kalıcı disk yok)."""
@@ -903,6 +974,90 @@ class TestPushKeyDurability:
         finally:
             monkeypatch.delenv("ENABLE_SCHEDULER")
             importlib.reload(config)
+
+
+class TestVapidKeyPersistence:
+    """KOD12: VAPID anahtari disk degil veritabaninda saklanmali.
+
+    Render her deploy'da dosya sistemini sifirladigi icin diskteki anahtar
+    kaybolur ve telefondaki push abonelikleri gecersizlesir.
+    """
+
+    @pytest.fixture
+    def clean_vapid(self, app, monkeypatch):
+        import app.vapid_keys as vapid_keys
+        monkeypatch.delenv("VAPID_PRIVATE_KEY", raising=False)
+        monkeypatch.delenv("VAPID_PUBLIC_KEY", raising=False)
+        monkeypatch.delenv("VAPID_PRIVATE_KEY_DER_B64", raising=False)
+        monkeypatch.setattr(vapid_keys, "_cached_keys", None, raising=False)
+        monkeypatch.setattr(vapid_keys, "KEYS_FILE", "/nonexistent/vapid_keys.json")
+        yield
+        monkeypatch.setattr(vapid_keys, "_cached_keys", None, raising=False)
+
+    def test_generated_key_is_stored_in_database(self, app, clean_vapid):
+        import app.vapid_keys as vapid_keys
+        from app.models import AppSetting
+
+        keys = vapid_keys.get_vapid_keys()
+        assert keys.get("private_key") and keys.get("public_key")
+
+        row = AppSetting.query.filter_by(key="vapid_keys").first()
+        assert row is not None, 'VAPID anahtari veritabanina yazilmadi'
+        assert keys["public_key"] in row.value
+
+    def test_key_survives_cache_reset(self, app, clean_vapid):
+        """Yeni surec (restart) ayni anahtari okumali."""
+        import app.vapid_keys as vapid_keys
+
+        first = vapid_keys.get_vapid_keys()["public_key"]
+        vapid_keys._cached_keys = None
+        second = vapid_keys.get_vapid_keys()["public_key"]
+        assert first == second, 'Restart sonrasi VAPID anahtari degisti'
+
+    def test_database_key_wins_over_disk(self, app, clean_vapid, monkeypatch):
+        import json
+
+        import app.vapid_keys as vapid_keys
+        from app.models import AppSetting
+
+        vapid_keys._save_keys_to_db({
+            "private_key": "db-private",
+            "public_key": "db-public",
+        })
+        # Diskte farkli bir anahtar olsa da veritabani oncelikli olmali.
+        monkeypatch.setattr(
+            vapid_keys, "_load_keys",
+            lambda: {"private_key": "disk-private", "public_key": "disk-public"},
+        )
+        vapid_keys._cached_keys = None
+
+        keys = vapid_keys.get_vapid_keys()
+        assert keys["public_key"] == "db-public"
+        assert AppSetting.query.filter_by(key="vapid_keys").first() is not None
+        assert json.loads(AppSetting.query.first().value)["public_key"] == "db-public"
+
+    def test_env_key_not_persisted_to_database(self, app, clean_vapid, monkeypatch):
+        """Ortam anahtari varsa veritabanina yazilmaz; kaynak ortamda kalir."""
+        import app.vapid_keys as vapid_keys
+        from app.models import AppSetting
+
+        monkeypatch.setenv("VAPID_PRIVATE_KEY", "env-private")
+        monkeypatch.setenv("VAPID_PUBLIC_KEY", "env-public")
+
+        keys = vapid_keys.get_vapid_keys()
+        assert keys["public_key"] == "env-public"
+        assert AppSetting.query.filter_by(key="vapid_keys").first() is None
+
+    def test_corrupt_database_value_is_ignored(self, app, clean_vapid):
+        import app.vapid_keys as vapid_keys
+        from app.models import AppSetting
+
+        db.session.add(AppSetting(key="vapid_keys", value="{bozuk json"))
+        db.session.commit()
+        vapid_keys._cached_keys = None
+
+        keys = vapid_keys.get_vapid_keys()
+        assert keys.get("public_key"), 'Bozuk kayit yeni anahtar uretmeyi engellememeli'
 
 
 class TestTheme:
@@ -1105,6 +1260,70 @@ class TestDatabaseUrl:
             'gerektirdiği için requirements.txt içindeki pin kontrol edilmeli'
         )
         assert postgresql.psycopg2 is not None
+
+
+class TestProxyHeaders:
+    """KOD11: Render gibi ters vekil arkasinda https URL uretilmeli."""
+
+    def test_https_scheme_behind_proxy(self):
+        class ProxyConfig(TestConfig):
+            TRUST_PROXY = True
+
+        app = create_app(config_class=ProxyConfig)
+        with app.app_context():
+            db.create_all()
+        try:
+            with app.test_client() as client:
+                response = client.post(
+                    '/forgot-password',
+                    data={'username': 'yok', 'email': 'yok@bod.com'},
+                    headers={'X-Forwarded-Proto': 'https',
+                             'X-Forwarded-Host': 'kredi-kart-takip.onrender.com'},
+                )
+                assert response.status_code == 200
+        finally:
+            with app.app_context():
+                db.session.remove()
+                db.drop_all()
+
+    def test_reset_email_uses_https_when_proxied(self):
+        """Sifre sifirlama baglantisi http:// olmamali.
+
+        ProxyFix yalnizca wsgi_app katmaninda calisir; bu yuzden istek
+        test_client uzerinden gonderilmelidir.
+        """
+        class ProxyConfig(TestConfig):
+            TRUST_PROXY = True
+
+        app = create_app(config_class=ProxyConfig)
+        captured = {}
+
+        with app.app_context():
+            from app.models import User
+            user = User(username='proxyuser', email='proxy@example.com')
+            user.set_password('pw')
+            db.session.add(user)
+            db.session.commit()
+
+            original_warning = app.logger.warning
+            app.logger.warning = lambda msg, *a: captured.update(url=str(a[0]) if a else msg)
+            try:
+                client = app.test_client()
+                response = client.post(
+                    '/forgot-password',
+                    data={'username': 'proxyuser', 'email': 'proxy@example.com'},
+                    headers={'X-Forwarded-Proto': 'https',
+                             'X-Forwarded-Host': 'kredi-kart-takip.onrender.com'},
+                )
+                assert response.status_code == 200
+            finally:
+                app.logger.warning = original_warning
+                db.session.rollback()
+
+        assert captured, 'Sifre sifirlama baglantisi loglanmadi'
+        assert captured['url'].startswith('https://kredi-kart-takip.onrender.com/'), (
+            f"Sifre sifirlama baglantisi yanlis: {captured['url']}"
+        )
 
 
 if __name__ == '__main__':

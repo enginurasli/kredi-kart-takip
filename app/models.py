@@ -170,6 +170,20 @@ class Setting(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), default=get_utc_now)
 
 
+class AppSetting(db.Model):
+    """Uygulama geneli kalıcı ayarlar.
+
+    Render gibi platformlarda dosya sistemi her deploy'da sıfırlandığı için
+    VAPID anahtarı gibi kalıcı olması gereken değerler burada saklanır.
+    """
+
+    __tablename__ = "app_settings"
+
+    key = db.Column(db.String(64), primary_key=True)
+    value = db.Column(db.Text, nullable=False)
+    updated_at = db.Column(db.DateTime(timezone=True), default=get_utc_now, onupdate=get_utc_now)
+
+
 @login_manager.user_loader
 def load_user(user_id):
     return db.session.get(User, int(user_id))

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kart-takip-v4';
+const CACHE_NAME = 'kart-takip-v5';
 const urlsToCache = [
     '/static/css/style.css',
     '/static/js/app.js',
@@ -12,6 +12,8 @@ self.addEventListener('install', event => {
         caches.open(CACHE_NAME)
             .then(cache => cache.addAll(urlsToCache))
     );
+    // Yeni sürümü beklemeden etkinleştir; aksi halde kullanıcı sekmeyi
+    // kapatana kadar eski service worker ile eski varlıkları sunar.
     self.skipWaiting();
 });
 
@@ -24,6 +26,7 @@ self.addEventListener('activate', event => {
             );
         })
     );
+    // Eski sürümün kontrol ettiği tüm istemcileri (açık sekmeler dahil) ele al.
     self.clients.claim();
 });
 
@@ -50,16 +53,20 @@ self.addEventListener('fetch', event => {
             }
 
             if (isStaticAsset(url)) {
-                const cached = await caches.match(request);
-                if (cached) return cached;
                 const network = await fetch(request);
                 if (network && network.ok) {
                     const copy = network.clone();
                     caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
+                    return network;
                 }
+                const cached = await caches.match(request);
+                if (cached) return cached;
                 return network;
             }
 
+            // Sayfa (HTML) istekleri: ağ öncelikli, bağlantı yoksa önbellek.
+            // Eski HTML'i önbellekten servis etmek yeni kodun hiç görünmemesine
+            // yol açar; bu yüzden yalnızca ağ başarısız olduğunda önbelleğe düşülür.
             const network = await fetch(request).catch(() => null);
             if (network && network.ok) {
                 const copy = network.clone();
