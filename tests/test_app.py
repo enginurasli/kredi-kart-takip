@@ -870,6 +870,142 @@ class TestTemplateScripts:
         )
 
 
+def _read_png(path):
+    """PNG'yi bağımlılıksız okur; alfa kanalı dahil RGBA piksel döner."""
+    import struct
+    import zlib
+
+    data = path.read_bytes()
+    assert data[:8] == b'\x89PNG\r\n\x1a\n', f'{path.name}: PNG imzasi gecersiz'
+    pos, idat, ihdr = 8, b'', None
+    while pos < len(data):
+        length = struct.unpack('>I', data[pos:pos + 4])[0]
+        chunk_type = data[pos + 4:pos + 8]
+        chunk_data = data[pos + 8:pos + 8 + length]
+        if chunk_type == b'IHDR':
+            ihdr = struct.unpack('>IIBBBBB', chunk_data)
+        elif chunk_type == b'IDAT':
+            idat += chunk_data
+        pos += 12 + length
+
+    width, height, depth, color_type = ihdr[0], ihdr[1], ihdr[2], ihdr[3]
+    assert depth == 8 and color_type == 6, f'{path.name}: 8-bit RGBA degil'
+
+    raw = zlib.decompress(idat)
+    stride = width * 4
+    rows, prev, i = [], bytearray(stride), 0
+    for _ in range(height):
+        filt = raw[i]
+        i += 1
+        line = bytearray(raw[i:i + stride])
+        i += stride
+        for x in range(stride):
+            a = line[x - 4] if x >= 4 else 0
+            b = prev[x]
+            c = prev[x - 4] if x >= 4 else 0
+            if filt == 1:
+                line[x] = (line[x] + a) & 255
+            elif filt == 2:
+                line[x] = (line[x] + b) & 255
+            elif filt == 3:
+                line[x] = (line[x] + (a + b) // 2) & 255
+            elif filt == 4:
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                pred = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                line[x] = (line[x] + pred) & 255
+        prev = line
+        rows.append([tuple(line[x * 4:x * 4 + 4]) for x in range(width)])
+    return width, height, rows
+
+
+class TestAppIcons:
+    """KOD13: PWA ikonlari gercek bir cizim olmali, tek renk kare degil."""
+
+    @staticmethod
+    def _icon_dir():
+        import pathlib
+        return pathlib.Path(__file__).resolve().parent.parent / 'app' / 'static' / 'icons'
+
+    def test_icons_are_valid_rgba_png(self):
+        for name in ('icon-192', 'icon-512'):
+            path = self._icon_dir() / f'{name}.png'
+            assert path.exists(), f'{name}.png eksik'
+            width, height, pixels = _read_png(path)
+            assert (width, height) == (int(name.split('-')[1]),) * 2
+            assert pixels[0][0][3] == 0, f'{name}.png kose saydam olmali'
+
+    def test_icons_are_not_flat_squares(self):
+        """Eski ikon tek renk kareydi; simdi farkli renkler icermeli."""
+        for name in ('icon-192', 'icon-512'):
+            _, _, pixels = _read_png(self._icon_dir() / f'{name}.png')
+            colors = {p[:3] for row in pixels for p in row if p[3] > 200}
+            assert len(colors) > 20, (
+                f'{name}.png sadece {len(colors)} renk iceriyor; '
+                'tek renk kare uretilmis olabilir'
+            )
+
+    def test_card_elements_present(self):
+        """Manyetik serit, cip ve beyaz detay cizilmis olmali."""
+        _, _, pixels = _read_png(self._icon_dir() / 'icon-192.png')
+        stripe = sum(
+            1 for row in pixels for p in row
+            if p[3] > 200 and abs(p[0] - 232) < 9 and abs(p[1] - 234) < 9
+            and abs(p[2] - 237) < 9
+        )
+        chip = sum(
+            1 for row in pixels for p in row
+            if p[3] > 200 and 195 < p[0] < 252 and p[1] > 155 and p[2] < 150
+        )
+        white = sum(
+            1 for row in pixels for p in row
+            if p[3] > 200 and p[0] > 245 and p[1] > 245 and p[2] > 245
+        )
+        assert stripe > 200, f'manyetik serit yok ({stripe} piksel)'
+        assert chip > 100, f'cip yok ({chip} piksel)'
+        assert white > 20, f'beyaz detay yok ({white} piksel)'
+
+    def test_maskable_icons_are_fully_opaque(self):
+        """Android maskesi saydam koseyi kirpar; maske ikonu dolu olmali."""
+        for name in ('icon-maskable-192', 'icon-maskable-512'):
+            path = self._icon_dir() / f'{name}.png'
+            assert path.exists(), f'{name}.png eksik'
+            width, _, pixels = _read_png(path)
+            assert pixels[0][0][3] == 255, f'{name}.png kose saydam'
+            opaque = sum(1 for row in pixels for p in row if p[3] > 200)
+            assert opaque == width * width, f'{name}.png tam kapali degil'
+
+    def test_maskable_content_inside_safe_zone(self):
+        """Guvenli alan disindaki icerik Android maskesinde kirpilir."""
+        for name in ('icon-maskable-192', 'icon-maskable-512'):
+            width, _, pixels = _read_png(self._icon_dir() / f'{name}.png')
+            center = (width - 1) / 2
+            safe_radius_sq = (min(width, width) * 0.4) ** 2
+            inside = 0
+            for y, row in enumerate(pixels):
+                for x, p in enumerate(row):
+                    if p[3] > 200 and (x - center) ** 2 + (y - center) ** 2 <= safe_radius_sq:
+                        inside += 1
+            assert inside / (width * width) > 0.15, (
+                f'{name}.png guvenli alanda yeterli icerik yok '
+                f'({inside / (width * width):.1%})'
+            )
+
+    def test_manifest_declares_both_purposes(self, client):
+        import json as json_module
+        response = client.get('/static/manifest.json')
+        assert response.status_code == 200
+        manifest = json_module.loads(response.data)
+        purposes = {icon.get('purpose') for icon in manifest['icons']}
+        assert 'any' in purposes, 'manifest any ikonu icermiyor'
+        assert 'maskable' in purposes, 'manifest maskable ikonu icermiyor'
+        for icon in manifest['icons']:
+            src = icon['src']
+            assert src.startswith('/static/'), f"manifest yolu beklenmedik: {src}"
+            path = self._icon_dir().parent / src[len('/static/'):]
+            assert path.exists(), f"manifest ikonu eksik: {src}"
+
+
 class TestServiceWorkerStaleness:
     """KOD10: Eski service worker yeni kodun görünmesini engellemesin."""
 
