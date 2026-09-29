@@ -1049,5 +1049,63 @@ class TestNotificationLifecycle:
         assert 'temizlendi' in response.get_json()['message']
 
 
+class TestDatabaseUrl:
+    """Render'ın postgres:// ve postgresql:// biçimleri psycopg2 sürücüsüne bağlanmalı."""
+
+    def _uri(self, value, monkeypatch):
+        monkeypatch.setenv('DATABASE_URL', value)
+        import importlib
+
+        import config as config_module
+        importlib.reload(config_module)
+        return config_module.Config.SQLALCHEMY_DATABASE_URI
+
+    def test_postgres_scheme_uses_psycopg2_driver(self, monkeypatch):
+        uri = self._uri('postgres://user:pw@host:5432/db', monkeypatch)
+        assert uri == 'postgresql+psycopg2://user:pw@host:5432/db'
+
+    def test_postgresql_scheme_uses_psycopg2_driver(self, monkeypatch):
+        uri = self._uri('postgresql://user:pw@host:5432/db', monkeypatch)
+        assert uri == 'postgresql+psycopg2://user:pw@host:5432/db'
+
+    def test_query_params_are_preserved(self, monkeypatch):
+        uri = self._uri('postgres://u:p@h:5432/db?sslmode=require', monkeypatch)
+        assert uri.endswith('?sslmode=require')
+
+    def test_sqlite_url_is_untouched(self, monkeypatch):
+        monkeypatch.delenv('DATABASE_URL', raising=False)
+        import importlib
+
+        import config as config_module
+        importlib.reload(config_module)
+        assert config_module.Config.SQLALCHEMY_DATABASE_URI.startswith('sqlite:///')
+
+    def test_driver_is_importable(self, monkeypatch):
+        """Render'da psycopg2-binary kurulu; sürücü adı yanlışsa import hatası verir.
+
+        create_engine bağlantı kurmadan sürücüyü import eder, yani Render'daki
+        ModuleNotFoundError'ın çıktığı yeri birebir yeniden üretir.
+        """
+        pytest.importorskip('psycopg2')
+        uri = self._uri('postgres://u:p@h:5432/db', monkeypatch)
+        from sqlalchemy import create_engine
+
+        engine = create_engine(uri)
+        assert engine.dialect.driver == 'psycopg2'
+        assert engine.dialect.dbapi is not None
+
+    def test_plain_postgresql_url_would_break_on_sqlalchemy_21(self, monkeypatch):
+        """SQLAlchemy 2.1 varsayılanı psycopg3 kullanıyor; bu yüzden pin şart."""
+        import sqlalchemy
+
+        from sqlalchemy.dialects import postgresql
+
+        assert sqlalchemy.__version__.startswith('2.0'), (
+            f'SQLAlchemy {sqlalchemy.__version__} kurulu; 2.1 psycopg3 '
+            'gerektirdiği için requirements.txt içindeki pin kontrol edilmeli'
+        )
+        assert postgresql.psycopg2 is not None
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

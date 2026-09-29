@@ -14,6 +14,10 @@ class Config:
     )
     if _db_url.startswith("postgres://"):
         _db_url = _db_url.replace("postgres://", "postgresql://", 1)
+    # SQLAlchemy 2.1 postgresql:// için varsayılan sürücüyü psycopg3'e
+    # çeviriyor; kurulu paket psycopg2 olduğu için sürücüyü açıkça yazıyoruz.
+    if _db_url.startswith("postgresql://"):
+        _db_url = "postgresql+psycopg2://" + _db_url[len("postgresql://"):]
     SQLALCHEMY_DATABASE_URI = _db_url
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False

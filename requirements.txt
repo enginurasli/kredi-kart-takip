@@ -2,6 +2,8 @@ Flask==3.0.3
 Flask-SQLAlchemy==3.1.1
 Flask-Login==0.6.3
 Werkzeug==3.0.4
+# 2.1 postgresql:// için psycopg3 gerektiriyor; psycopg2 ile kullandığımız için sabitleniyor
+SQLAlchemy==2.0.52
 APScheduler==3.10.4
 gunicorn==23.0.0
 py-vapid==1.9.4
