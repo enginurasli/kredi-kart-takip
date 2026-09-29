@@ -22,8 +22,7 @@ document.addEventListener('DOMContentLoaded', loadCards);
 
 async function loadCards() {
     try {
-        const res = await fetch('/api/cards');
-        const cards = await res.json();
+        const cards = await fetchJson('/api/cards');
         const container = document.getElementById('cardsList');
         const emptyState = document.getElementById('emptyCards');
 
@@ -36,13 +35,13 @@ async function loadCards() {
         container.innerHTML = cards.map(card => `
             <div class="card-item ${!card.is_active ? 'card-inactive' : ''}">
                 <div class="card-header">
-                    <span class="card-bank">${card.bank_name}</span>
+                    <span class="card-bank">${escapeHtml(card.bank_name)}</span>
                     <span class="card-status ${card.is_active ? 'active' : 'inactive'}">
                         ${card.is_active ? 'Aktif' : 'Pasif'}
                     </span>
                 </div>
-                <div class="card-name">${card.card_name}</div>
-                <div class="card-balance">${formatMoney(card.current_balance)}</div>
+                <div class="card-name">${escapeHtml(card.card_name)}</div>
+                <div class="card-balance">${moneyHtml(card.current_balance, card.currency)}</div>
                 <div class="card-details">
                     <span>Kesim: ${card.statement_day}</span>
                     <span>Son Ödeme: ${card.due_day}</span>
@@ -69,15 +68,6 @@ async function deleteCard(cardId) {
     } catch (err) {
         console.error('Kart silme hatası:', err);
     }
-}
-
-function formatMoney(amount) {
-    return new Intl.NumberFormat('tr-TR', {
-        style: 'currency',
-        currency: 'TRY',
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 0
-    }).format(amount);
 }
 </script>
 {% endblock %}

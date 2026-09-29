@@ -1,7 +1,9 @@
 from datetime import datetime, date, UTC
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_login import UserMixin
+from sqlalchemy import CheckConstraint, UniqueConstraint
 from app import db, login_manager
+from app.date_utils import get_utc_now
 
 
 class User(UserMixin, db.Model):
@@ -11,7 +13,9 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.now(UTC))
+    created_at = db.Column(db.DateTime(timezone=True), default=get_utc_now)
+    reset_token_hash = db.Column(db.String(64), nullable=True)
+    reset_token_expires_at = db.Column(db.Float, nullable=True)
 
     cards = db.relationship("Card", backref="user", lazy=True, cascade="all, delete-orphan")
     devices = db.relationship("Device", backref="user", lazy=True, cascade="all, delete-orphan")
@@ -26,6 +30,12 @@ class User(UserMixin, db.Model):
 
 class Card(db.Model):
     __tablename__ = "cards"
+    __table_args__ = (
+        CheckConstraint("statement_day BETWEEN 1 AND 31", name="ck_cards_statement_day"),
+        CheckConstraint("due_day BETWEEN 1 AND 31", name="ck_cards_due_day"),
+        CheckConstraint("current_balance >= 0", name="ck_cards_current_balance"),
+        CheckConstraint("reminder_days BETWEEN 1 AND 30", name="ck_cards_reminder_days"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
@@ -38,7 +48,7 @@ class Card(db.Model):
     reminder_days = db.Column(db.Integer, default=2)
     is_active = db.Column(db.Boolean, default=True)
     note = db.Column(db.Text, default="")
-    created_at = db.Column(db.DateTime, default=datetime.now(UTC))
+    created_at = db.Column(db.DateTime(timezone=True), default=get_utc_now)
 
     payments = db.relationship("Payment", backref="card", lazy=True, cascade="all, delete-orphan")
 
@@ -65,6 +75,10 @@ class Card(db.Model):
 
 class Payment(db.Model):
     __tablename__ = "payments"
+    __table_args__ = (
+        UniqueConstraint("card_id", "month", "year", name="uq_payments_card_period"),
+        CheckConstraint("amount >= 0", name="ck_payments_amount"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     card_id = db.Column(db.Integer, db.ForeignKey("cards.id"), nullable=False)
@@ -73,10 +87,10 @@ class Payment(db.Model):
     due_date = db.Column(db.Date, nullable=False)
     statement_date = db.Column(db.Date, nullable=False)
     is_paid = db.Column(db.Boolean, default=False)
-    paid_at = db.Column(db.DateTime, nullable=True)
+    paid_at = db.Column(db.DateTime(timezone=True), nullable=True)
     month = db.Column(db.Integer, nullable=False)
     year = db.Column(db.Integer, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.now(UTC))
+    created_at = db.Column(db.DateTime(timezone=True), default=get_utc_now)
 
     notifications = db.relationship("Notification", backref="payment", lazy=True, cascade="all, delete-orphan")
 
@@ -98,6 +112,9 @@ class Payment(db.Model):
 
 class Notification(db.Model):
     __tablename__ = "notifications"
+    __table_args__ = (
+        UniqueConstraint("payment_id", "reminder_type", name="uq_notifications_payment_reminder"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     payment_id = db.Column(db.Integer, db.ForeignKey("payments.id"), nullable=False)
@@ -105,10 +122,10 @@ class Notification(db.Model):
     reminder_type = db.Column(db.String(20), default="2_days")
     message = db.Column(db.Text, nullable=False)
     status = db.Column(db.String(20), default="pending")
-    scheduled_at = db.Column(db.DateTime, nullable=False)
-    sent_at = db.Column(db.DateTime, nullable=True)
-    dismissed_at = db.Column(db.DateTime, nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.now(UTC))
+    scheduled_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    sent_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    dismissed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=get_utc_now)
 
     def to_dict(self):
         return {
@@ -127,13 +144,17 @@ class Notification(db.Model):
 
 class Device(db.Model):
     __tablename__ = "devices"
+    __table_args__ = (
+        UniqueConstraint("user_id", "endpoint_hash", name="uq_devices_user_endpoint"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
+    endpoint_hash = db.Column(db.String(64), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     name = db.Column(db.String(100), nullable=False)
     push_subscription = db.Column(db.Text, nullable=True)
     is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.now(UTC))
+    created_at = db.Column(db.DateTime(timezone=True), default=get_utc_now)
 
 
 class Setting(db.Model):
@@ -146,7 +167,7 @@ class Setting(db.Model):
     currency = db.Column(db.String(10), default="TRY")
     notification_sound = db.Column(db.String(50), default="default")
     theme = db.Column(db.String(20), default="light")
-    created_at = db.Column(db.DateTime, default=datetime.now(UTC))
+    created_at = db.Column(db.DateTime(timezone=True), default=get_utc_now)
 
 
 @login_manager.user_loader

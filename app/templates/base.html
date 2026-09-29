@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="tr" data-theme="{{ app_theme|default('light') }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#1a73e8">
+    <meta name="theme-color" content="{{ '#202124' if app_theme == 'dark' else '#1a73e8' }}">
     <meta name="description" content="Kredi kartı ödeme hatırlatıcı uygulaması">
     <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
     <link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('static', filename='icons/icon-192.png') }}">
@@ -24,9 +24,11 @@
             <a href="{{ url_for('main.payments') }}" class="{% if request.endpoint == 'main.payments' %}active{% endif %}">Ödemeler</a>
             <a href="{{ url_for('main.notifications') }}" class="{% if request.endpoint == 'main.notifications' %}active{% endif %}">Bildirimler</a>
             <a href="{{ url_for('main.settings') }}" class="{% if request.endpoint == 'main.settings' %}active{% endif %}">Ayarlar</a>
-            <a href="{{ url_for('auth.logout') }}" class="nav-logout">Çıkış</a>
+            <a href="{{ url_for('auth.logout') }}" class="nav-logout"
+               onclick="event.preventDefault(); document.getElementById('logoutForm').submit();">Çıkış</a>
         </div>
     </nav>
+    <form id="logoutForm" action="{{ url_for('auth.logout') }}" method="POST" hidden></form>
     {% endif %}
 
     <main class="container">

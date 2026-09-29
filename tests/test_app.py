@@ -13,12 +13,15 @@ from app.date_utils import (
     format_date_tr, format_date_short, days_until, calculate_due_date
 )
 from app.notifications import create_payment_notification, dismiss_notification
+from app.auth import _issue_reset_token
+from app.date_utils import get_utc_now
 
 
 class TestConfig:
     TESTING = True
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
     SECRET_KEY = 'test-secret'
+    ENABLE_SCHEDULER = False
 
 
 @pytest.fixture
@@ -166,11 +169,11 @@ class TestAuth:
         assert response.status_code == 200
 
     def test_logout(self, auth_client):
-        response = auth_client.get('/logout', follow_redirects=True)
+        response = auth_client.post('/logout', follow_redirects=True)
         assert response.status_code == 200
 
 
-    def test_password_reset_flow(self, client):
+    def test_password_reset_flow(self, app, client):
         client.post('/register', data={
             'username': 'resetuser',
             'email': 'reset@test.com',
@@ -178,39 +181,175 @@ class TestAuth:
             'password2': 'oldpass123'
         }, follow_redirects=True)
 
-        response = client.post('/forgot-password', data={
-            'username': 'resetuser',
-            'email': 'reset@test.com'
-        }, follow_redirects=True)
-        assert response.status_code == 200
+        with app.app_context():
+            user = User.query.filter_by(username='resetuser').first()
+            token = _issue_reset_token(user)
+            db.session.commit()
 
-        response = client.post('/reset-password', data={
+        response = client.post(f'/reset-password/{token}', data={
             'password': 'newpass123',
             'password2': 'newpass123'
         }, follow_redirects=True)
         assert response.status_code == 200
 
-        client.get('/logout', follow_redirects=True)
-        response = client.post('/login', data={
+        client.post('/logout', follow_redirects=True)
+        client.post('/login', data={
             'username': 'resetuser',
             'password': 'newpass123'
         }, follow_redirects=True)
-        assert response.status_code == 200
+        assert b'Hesab\xc4\xb1n\xc4\xb1z' in client.get('/').data or client.get('/').status_code == 200
 
-
-    def test_password_reset_wrong_email(self, client):
+    def test_forgot_password_sends_neutral_response(self, app, client):
+        """Kullanıcı var/yok bilgisi sızdırılmamalı."""
         client.post('/register', data={
-            'username': 'resetuser2',
-            'email': 'reset2@test.com',
+            'username': 'resetuser3',
+            'email': 'reset3@test.com',
+            'password': 'oldpass123',
+            'password2': 'oldpass123'
+        }, follow_redirects=True)
+
+        valid = client.post('/forgot-password', data={
+            'username': 'resetuser3',
+            'email': 'reset3@test.com'
+        }, follow_redirects=True)
+        invalid = client.post('/forgot-password', data={
+            'username': 'resetuser3',
+            'email': 'yanlis@test.com'
+        }, follow_redirects=True)
+        unknown = client.post('/forgot-password', data={
+            'username': 'yokboyle',
+            'email': 'yok@test.com'
+        }, follow_redirects=True)
+
+        valid_text = valid.data.decode('utf-8')
+        invalid_text = invalid.data.decode('utf-8')
+        unknown_text = unknown.data.decode('utf-8')
+        marker = 'sıfırlama bağlantısı e-postanıza gönderildi'
+
+        assert marker in valid_text
+        assert marker in invalid_text
+        assert marker in unknown_text
+        # Üç yanıt da aynı olmalı; "eşleşmiyor" gibi ipucu vermemeli.
+        for response_text in (valid_text, invalid_text, unknown_text):
+            assert 'eşleşmiyor' not in response_text
+            assert 'bulunamadı' not in response_text
+
+    def test_reset_token_is_required(self, app, client):
+        """E-posta doğrulaması olmadan sıfırlama yapılamaz."""
+        client.post('/register', data={
+            'username': 'resetuser4',
+            'email': 'reset4@test.com',
             'password': 'oldpass123',
             'password2': 'oldpass123'
         }, follow_redirects=True)
 
         response = client.post('/forgot-password', data={
-            'username': 'resetuser2',
-            'email': 'yanlis@test.com'
+            'username': 'resetuser4',
+            'email': 'reset4@test.com'
         }, follow_redirects=True)
         assert response.status_code == 200
+
+        # Oturum bilgisi olmadan doğrudan sıfırlama denemesi reddedilmeli.
+        response = client.post('/reset-password/guesser-token', data={
+            'password': 'hacked123',
+            'password2': 'hacked123'
+        }, follow_redirects=True)
+        assert b'ge\xc3\xa7ersiz' in response.data
+
+        with app.app_context():
+            user = User.query.filter_by(username='resetuser4').first()
+            assert user.check_password('oldpass123')
+
+    def test_reset_token_is_single_use(self, app, client):
+        client.post('/register', data={
+            'username': 'resetuser5',
+            'email': 'reset5@test.com',
+            'password': 'oldpass123',
+            'password2': 'oldpass123'
+        }, follow_redirects=True)
+
+        with app.app_context():
+            user = User.query.filter_by(username='resetuser5').first()
+            token = _issue_reset_token(user)
+            db.session.commit()
+
+        client.post(f'/reset-password/{token}', data={
+            'password': 'firstpass123',
+            'password2': 'firstpass123'
+        }, follow_redirects=True)
+
+        # Aynı token ikinci kez kullanılamamalı.
+        response = client.post(f'/reset-password/{token}', data={
+            'password': 'secondpass123',
+            'password2': 'secondpass123'
+        }, follow_redirects=True)
+        assert b'ge\xc3\xa7ersiz' in response.data
+
+        with app.app_context():
+            user = User.query.filter_by(username='resetuser5').first()
+            assert user.check_password('firstpass123')
+
+    def test_expired_token_is_rejected(self, app, client):
+        client.post('/register', data={
+            'username': 'resetuser6',
+            'email': 'reset6@test.com',
+            'password': 'oldpass123',
+            'password2': 'oldpass123'
+        }, follow_redirects=True)
+
+        with app.app_context():
+            user = User.query.filter_by(username='resetuser6').first()
+            token = _issue_reset_token(user)
+            user.reset_token_expires_at = get_utc_now().timestamp() - 10
+            db.session.commit()
+
+        response = client.post(f'/reset-password/{token}', data={
+            'password': 'expiredpass1',
+            'password2': 'expiredpass1'
+        }, follow_redirects=True)
+        assert b'ge\xc3\xa7ersiz' in response.data
+
+
+class TestOpenRedirect:
+    def test_next_parameter_rejects_external_host(self, client):
+        client.post('/register', data={
+            'username': 'redir', 'email': 'redir@test.com',
+            'password': 'pass1234', 'password2': 'pass1234'
+        }, follow_redirects=True)
+
+        response = client.post('/login?next=//evil.com/steal', data={
+            'username': 'redir', 'password': 'pass1234'
+        })
+        assert response.status_code == 302
+        assert 'evil.com' not in response.headers['Location']
+
+        response = client.post('/login?next=https://evil.com/steal', data={
+            'username': 'redir', 'password': 'pass1234'
+        })
+        assert 'evil.com' not in response.headers['Location']
+
+    def test_next_parameter_allows_internal_path(self, client):
+        client.post('/register', data={
+            'username': 'redir2', 'email': 'redir2@test.com',
+            'password': 'pass1234', 'password2': 'pass1234'
+        }, follow_redirects=True)
+        response = client.post('/login?next=/cards', data={
+            'username': 'redir2', 'password': 'pass1234'
+        })
+        assert response.status_code == 302
+        assert response.headers['Location'].endswith('/cards')
+
+
+class TestLogoutIsPostOnly:
+    def test_get_logout_is_rejected(self, auth_client):
+        response = auth_client.get('/logout')
+        assert response.status_code == 405
+
+    def test_post_logout_ends_session(self, auth_client):
+        response = auth_client.post('/logout', follow_redirects=True)
+        assert response.status_code == 200
+        response = auth_client.get('/api/cards')
+        assert response.status_code == 401
 
 
 class TestCardCRUD:
@@ -398,8 +537,12 @@ class TestNotifications:
             notif1 = create_payment_notification(payment, reminder_days=2)
             notif2 = create_payment_notification(payment, reminder_days=2)
 
+            # Aynı satır bulunur; yeniden üretilmez, mevcut kayıt tazelenir.
             assert notif1 is not None
-            assert notif2 is None
+            assert notif2 is not None
+            assert notif1.id == notif2.id
+            assert db.session.get(Notification, notif1.id) is not None
+            assert Notification.query.count() == 1
 
     def test_dismiss_notification(self, app):
         with app.app_context():
@@ -467,6 +610,443 @@ class TestAPIEndpoints:
             content_type='application/json'
         )
         assert response.status_code == 200
+
+
+def add_card(client, due_day=20, balance=1000, reminder_days=2, currency='TRY',
+             card_name='Bonus', **extra):
+    payload = {
+        'bank_name': 'Garanti',
+        'card_name': card_name,
+        'statement_day': 5,
+        'due_day': due_day,
+        'current_balance': balance,
+        'currency': currency,
+        'reminder_days': reminder_days,
+    }
+    payload.update(extra)
+    response = client.post('/api/cards', data=json.dumps(payload), content_type='application/json')
+    assert response.status_code == 201
+    return response.get_json()
+
+
+class TestDashboardCounts:
+    """KOD2: unpaid_count / next_payment / toplam doğru hesaplanmalı."""
+
+    def test_unpaid_count_counts_unpaid_only(self, auth_client):
+        for due_day in (10, 15, 20, 25, 30):
+            add_card(auth_client, due_day=due_day)
+
+        dashboard = auth_client.get('/api/dashboard').get_json()
+        assert dashboard['unpaid_count'] == 5
+        assert dashboard['total_month'] == 5000.0
+
+        upcoming = auth_client.get('/api/payments/upcoming').get_json()
+        auth_client.post(f"/api/payments/{upcoming[0]['payment_id']}/paid")
+
+        dashboard = auth_client.get('/api/dashboard').get_json()
+        assert dashboard['unpaid_count'] == 4
+        assert dashboard['total_month'] == 4000.0
+
+    def test_paid_card_is_not_next_payment(self, auth_client):
+        add_card(auth_client, due_day=30, card_name='Yakindaki')
+        add_card(auth_client, due_day=10, card_name='Uzaktaki')
+
+        upcoming = auth_client.get('/api/payments/upcoming').get_json()
+        nearest = upcoming[0]
+        auth_client.post(f"/api/payments/{nearest['payment_id']}/paid")
+
+        dashboard = auth_client.get('/api/dashboard').get_json()
+        assert dashboard['unpaid_count'] == 1
+        assert dashboard['next_payment']['card_name'] == 'Garanti Uzaktaki'
+
+    def test_all_paid_clears_next_payment(self, auth_client):
+        add_card(auth_client)
+        for item in auth_client.get('/api/payments/upcoming').get_json():
+            auth_client.post(f"/api/payments/{item['payment_id']}/paid")
+
+        dashboard = auth_client.get('/api/dashboard').get_json()
+        assert dashboard['unpaid_count'] == 0
+        assert dashboard['next_payment'] is None
+        assert dashboard['total_month'] == 0.0
+
+
+class TestPaymentsListing:
+    """KOD3: Ödemeler sayfası vade tarihine göre listelenmeli, ay bazlı boş kalmamalı."""
+
+    def test_payments_list_not_empty_for_rolled_over_cards(self, auth_client):
+        # due_day bu ayın içinde geçmiş -> vade bir sonraki aya kayar
+        for due_day in (1, 10, 15):
+            add_card(auth_client, due_day=due_day)
+
+        payments = auth_client.get('/api/payments').get_json()
+        assert len(payments) > 0
+
+        upcoming_names = {i['card_name'] for i in auth_client.get('/api/payments/upcoming').get_json()}
+        listed_names = {p['card_name'] for p in payments}
+        assert upcoming_names.issubset(listed_names)
+
+    def test_payments_include_paid_with_badge(self, auth_client):
+        add_card(auth_client)
+        upcoming = auth_client.get('/api/payments/upcoming').get_json()
+        auth_client.post(f"/api/payments/{upcoming[0]['payment_id']}/paid")
+
+        payments = auth_client.get('/api/payments').get_json()
+        assert any(p['is_paid'] for p in payments)
+
+    def test_payments_sorted_by_due_date(self, auth_client):
+        for due_day in (5, 25, 15):
+            add_card(auth_client, due_day=due_day)
+
+        payments = auth_client.get('/api/payments').get_json()
+        due_dates = [p['due_date'] for p in payments]
+        assert due_dates == sorted(due_dates)
+
+
+class TestPaymentSync:
+    """KOD4: Ödeme kaydı kartın güncel bakiyesi ve para birimini yansıtmalı."""
+
+    def test_balance_update_syncs_unpaid_payment(self, app, auth_client):
+        add_card(auth_client, balance=500)
+        with app.app_context():
+            payment = Payment.query.filter_by(is_paid=False).first()
+            payment_id = payment.id
+            assert payment.amount == 500.0
+
+        auth_client.put('/api/cards/1',
+            data=json.dumps({'current_balance': 9999}),
+            content_type='application/json')
+
+        with app.app_context():
+            assert db.session.get(Payment, payment_id).amount == 9999.0
+
+    def test_currency_update_syncs_unpaid_payment(self, app, auth_client):
+        add_card(auth_client, currency='TRY')
+        auth_client.put('/api/cards/1',
+            data=json.dumps({'currency': 'USD'}),
+            content_type='application/json')
+
+        with app.app_context():
+            payments = Payment.query.filter_by(is_paid=False).all()
+            assert payments
+            assert all(p.currency == 'USD' for p in payments)
+
+    def test_paid_payment_amount_is_never_overwritten(self, app, auth_client):
+        add_card(auth_client, balance=500)
+        upcoming = auth_client.get('/api/payments/upcoming').get_json()
+        paid_id = upcoming[0]['payment_id']
+        auth_client.post(f"/api/payments/{paid_id}/paid")
+
+        auth_client.put('/api/cards/1',
+            data=json.dumps({'current_balance': 3000}),
+            content_type='application/json')
+
+        with app.app_context():
+            assert db.session.get(Payment, paid_id).amount == 500.0
+
+    def test_notification_message_refreshes_on_update(self, app, auth_client):
+        add_card(auth_client, balance=500)
+        with app.app_context():
+            before = Notification.query.filter_by(status='pending').first().message
+            assert '500.00' in before
+
+        auth_client.put('/api/cards/1',
+            data=json.dumps({'current_balance': 2500}),
+            content_type='application/json')
+
+        with app.app_context():
+            after = Notification.query.filter_by(status='pending').first().message
+            assert '2,500.00' in after
+
+
+class TestReminderLifecycle:
+    """KOD1/KOD5: Ödeme kaydı bildirim tercihinden bağımsız; tek canlı hatırlatma."""
+
+    def test_payments_created_even_when_notifications_disabled(self, app, auth_client):
+        auth_client.put('/api/settings',
+            data=json.dumps({'notifications_enabled': False}),
+            content_type='application/json')
+
+        add_card(auth_client)
+
+        with app.app_context():
+            assert Payment.query.count() > 0
+            assert Notification.query.count() == 0
+
+        upcoming = auth_client.get('/api/payments/upcoming').get_json()
+        assert upcoming
+        assert upcoming[0]['payment_id'] is not None
+
+    def test_reenabling_notifications_creates_reminders(self, app, auth_client):
+        auth_client.put('/api/settings',
+            data=json.dumps({'notifications_enabled': False}),
+            content_type='application/json')
+        add_card(auth_client)
+        auth_client.put('/api/settings',
+            data=json.dumps({'notifications_enabled': True}),
+            content_type='application/json')
+
+        from app.notifications import generate_notifications_for_upcoming_payments
+        with app.app_context():
+            generate_notifications_for_upcoming_payments(1)
+            assert Notification.query.filter_by(status='pending').count() > 0
+
+    def test_changing_reminder_days_cancels_old_reminder(self, app, auth_client):
+        add_card(auth_client, reminder_days=2)
+        with app.app_context():
+            assert Notification.query.filter_by(reminder_type='2_days').count() > 0
+
+        auth_client.put('/api/cards/1',
+            data=json.dumps({'reminder_days': 7}),
+            content_type='application/json')
+
+        with app.app_context():
+            assert Notification.query.filter_by(
+                reminder_type='2_days', status='pending').count() == 0
+            assert Notification.query.filter_by(
+                reminder_type='7_days', status='pending').count() > 0
+
+    def test_exactly_one_pending_reminder_per_payment(self, app, auth_client):
+        add_card(auth_client, reminder_days=2)
+        auth_client.put('/api/cards/1',
+            data=json.dumps({'reminder_days': 9}),
+            content_type='application/json')
+        auth_client.put('/api/cards/1',
+            data=json.dumps({'reminder_days': 3}),
+            content_type='application/json')
+
+        with app.app_context():
+            pending = Notification.query.filter_by(status='pending').all()
+            payment_ids = [n.payment_id for n in pending]
+            assert len(payment_ids) == len(set(payment_ids))
+
+
+class TestTemplateScripts:
+    """KOD0: Şablon içi JS tekrarı hata üretmemeli."""
+
+    def _inline_scripts(self, name):
+        import re
+        import pathlib
+        path = pathlib.Path(__file__).resolve().parent.parent / 'app' / 'templates' / name
+        source = path.read_text(encoding='utf-8')
+        scripts = re.findall(r'<script>(.*?)</script>', source, re.S)
+        return [s for s in scripts if 'const' in s or 'function' in s]
+
+    def test_no_duplicate_declarations(self):
+        import re
+        for template in ('dashboard.html', 'cards.html', 'card_detail.html',
+                         'card_form.html', 'payments.html', 'settings.html',
+                         'notifications.html'):
+            for script in self._inline_scripts(template):
+                code = re.sub(r'\{\{.*?\}\}', 'null', script)
+                # Tarayıcı kapsam kurallarına uygun: fonksiyon gövdeleri
+                # ayrı blok kapsamıdır, aynı isim farklı fonksiyonda kullanılabilir.
+                blocks = re.split(r'\bfunction\b|=>\s*\{', code)
+                for block in blocks:
+                    for name in set(re.findall(r'\bconst\s+([A-Za-z_$][\w$]*)\s*=', block)):
+                        count = len(re.findall(r'\bconst\s+' + re.escape(name) + r'\s*=', block))
+                        assert count == 1, (
+                            f"{template}: '{name}' ayni blok kapsaminda {count} kez const ile tanimli"
+                        )
+
+    def test_dashboard_loads_dashboard_once(self):
+        for script in self._inline_scripts('dashboard.html'):
+            assert script.count("fetchJson('/api/dashboard')") <= 1, (
+                "dashboard.html /api/dashboard'i birden fazla kez cekiyor"
+            )
+
+    def test_dashboard_page_renders(self, auth_client):
+        response = auth_client.get('/')
+        assert response.status_code == 200
+        assert b'loadDashboard' in response.data
+
+
+class TestPushKeyDurability:
+    """KOD7: VAPID anahtarı ortam değişkeninden okunabilmeli (kalıcı disk yok)."""
+
+    def test_env_keys_take_precedence(self, monkeypatch):
+        from py_vapid import Vapid
+        import app.vapid_keys as vapid_keys
+
+        vapid = Vapid()
+        vapid.generate_keys()
+        monkeypatch.setenv("VAPID_PRIVATE_KEY", vapid.private_pem().decode())
+        monkeypatch.setenv("VAPID_PUBLIC_KEY", "env-public-key")
+
+        keys = vapid_keys.get_vapid_keys()
+        assert keys["public_key"] == "env-public-key"
+
+    def test_der_key_derives_from_env(self, monkeypatch):
+        from py_vapid import Vapid
+        import app.vapid_keys as vapid_keys
+
+        vapid = Vapid()
+        vapid.generate_keys()
+        monkeypatch.setenv("VAPID_PRIVATE_KEY", vapid.private_pem().decode())
+        monkeypatch.setenv("VAPID_PUBLIC_KEY", "env-public-key")
+        monkeypatch.delenv("VAPID_PRIVATE_KEY_DER_B64", raising=False)
+
+        der_b64 = vapid_keys.get_private_key_der_b64()
+        # py_vapid bu biçimi imzalama için kabul etmeli.
+        Vapid.from_string(private_key=der_b64)
+
+    def test_scheduler_enabled_by_default(self):
+        import config
+        assert config.Config.ENABLE_SCHEDULER is True
+
+    def test_scheduler_can_be_disabled(self, monkeypatch):
+        monkeypatch.setenv("ENABLE_SCHEDULER", "false")
+        import importlib
+        import config
+        importlib.reload(config)
+        try:
+            assert config.Config.ENABLE_SCHEDULER is False
+        finally:
+            monkeypatch.delenv("ENABLE_SCHEDULER")
+            importlib.reload(config)
+
+
+class TestTheme:
+    """KOD9: Tema ayarı kaydedilip sayfaya uygulanmalı."""
+
+    def test_dark_theme_is_applied_to_pages(self, auth_client):
+        import re
+
+        def theme():
+            html = auth_client.get('/').data.decode()
+            match = re.search(r'data-theme="(\w+)"', html)
+            return match.group(1) if match else None
+
+        assert theme() == 'light'
+
+        auth_client.put('/api/settings',
+            data=json.dumps({'theme': 'dark'}),
+            content_type='application/json')
+        assert theme() == 'dark'
+
+        auth_client.put('/api/settings',
+            data=json.dumps({'theme': 'light'}),
+            content_type='application/json')
+        assert theme() == 'light'
+
+    def test_theme_applies_to_other_pages(self, auth_client):
+        auth_client.put('/api/settings',
+            data=json.dumps({'theme': 'dark'}),
+            content_type='application/json')
+        for path in ('/cards', '/payments', '/settings', '/notifications'):
+            assert b'data-theme="dark"' in auth_client.get(path).data, path
+
+    def test_anon_pages_render(self, client):
+        assert client.get('/login').status_code == 200
+        assert client.get('/register').status_code == 200
+        assert client.get('/forgot-password').status_code == 200
+
+    def test_css_defines_dark_theme_variables(self):
+        import pathlib
+        css = (pathlib.Path(__file__).resolve().parent.parent /
+               'app' / 'static' / 'css' / 'style.css').read_text(encoding='utf-8')
+        assert '[data-theme="dark"]' in css
+        assert '--card-bg' in css
+
+
+class TestNotificationLifecycle:
+    """KOD10: Geçersiz hatırlatmalar iptal edilmeli, eski kayıtlar temizlenmeli."""
+
+    def test_deactivating_card_cancels_pending(self, app, auth_client):
+        add_card(auth_client)
+        with app.app_context():
+            assert Notification.query.filter_by(status='pending').count() > 0
+
+            Card.query.first().is_active = False
+            db.session.commit()
+            from app.notifications import generate_notifications_for_upcoming_payments
+            generate_notifications_for_upcoming_payments(1)
+
+            assert Notification.query.filter_by(status='pending').count() == 0
+
+    def test_past_due_unpaid_cancels_pending(self, app, auth_client):
+        add_card(auth_client)
+        with app.app_context():
+            from app.notifications import cancel_stale_notifications
+            payment = Payment.query.filter_by(is_paid=False).first()
+            payment.due_date = date.today() - timedelta(days=5)
+            db.session.commit()
+
+            cancel_stale_notifications(1)
+            assert Notification.query.filter_by(
+                payment_id=payment.id, status='pending').count() == 0
+
+    def test_paid_payment_cancels_pending(self, app, auth_client):
+        add_card(auth_client)
+        with app.app_context():
+            from app.notifications import cancel_stale_notifications
+            payment = Payment.query.filter_by(is_paid=False).first()
+            payment.is_paid = True
+            db.session.commit()
+
+            cancel_stale_notifications(1)
+            assert Notification.query.filter_by(
+                payment_id=payment.id, status='pending').count() == 0
+
+    def test_deleting_card_removes_notifications(self, app, auth_client):
+        add_card(auth_client)
+        with app.app_context():
+            assert Notification.query.count() > 0
+
+        auth_client.delete('/api/cards/1')
+
+        with app.app_context():
+            assert Notification.query.count() == 0
+
+    def test_purge_removes_old_terminal_only(self, app, auth_client):
+        from datetime import datetime
+        add_card(auth_client)
+        with app.app_context():
+            from app.notifications import purge_old_notifications
+            payment = Payment.query.first()
+            old = Notification(
+                payment_id=payment.id, user_id=1, reminder_type='old',
+                message='eski', status='completed',
+                scheduled_at=datetime(2020, 1, 1), created_at=datetime(2020, 1, 1),
+            )
+            db.session.add(old)
+            db.session.commit()
+            old_id = old.id
+            pending_before = Notification.query.filter_by(status='pending').count()
+
+            removed = purge_old_notifications(days=180)
+            assert removed >= 1
+            assert db.session.execute(
+                db.select(Notification.id).where(Notification.id == old_id)
+            ).first() is None
+            # Bekleyen hatırlatmalar korunmalı.
+            assert Notification.query.filter_by(status='pending').count() == pending_before
+
+    def test_purge_keeps_session_usable(self, app, auth_client):
+        """Toplu silme sonrası aynı oturumda API hata vermemeli (KOD10)."""
+        from datetime import datetime
+        add_card(auth_client)
+        with app.app_context():
+            from app.notifications import purge_old_notifications
+            payment = Payment.query.first()
+            old = Notification(
+                payment_id=payment.id, user_id=1, reminder_type='old2',
+                message='eski', status='dismissed',
+                scheduled_at=datetime(2020, 1, 1), created_at=datetime(2020, 1, 1),
+            )
+            db.session.add(old)
+            db.session.commit()
+            purge_old_notifications(days=180)
+
+        # Aynı istemci oturumunda API çağrıları çalışmaya devam etmeli.
+        assert auth_client.get('/api/notifications').status_code == 200
+        assert auth_client.get('/api/dashboard').status_code == 200
+        assert auth_client.get('/api/payments').status_code == 200
+
+    def test_cleanup_endpoint(self, app, auth_client):
+        add_card(auth_client)
+        response = auth_client.post('/api/notifications/cleanup')
+        assert response.status_code == 200
+        assert 'temizlendi' in response.get_json()['message']
 
 
 if __name__ == '__main__':

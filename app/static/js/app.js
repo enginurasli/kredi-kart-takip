@@ -2,10 +2,46 @@ function toggleNav() {
     document.getElementById('navLinks').classList.toggle('show');
 }
 
+function escapeHtml(value) {
+    const element = document.createElement('div');
+    element.textContent = value == null ? '' : String(value);
+    return element.innerHTML;
+}
+
+function formatMoney(amount, currency = 'TRY') {
+    return new Intl.NumberFormat('tr-TR', {
+        style: 'currency',
+        currency: currency,
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2
+    }).format(Number(amount) || 0);
+}
+
+// HTML'e gömülürken kullanıcı verisi her zaman escapeHtml ile sarılmalıdır;
+// formatMoney yalnızca sayıyı biçimlendirir, HTML kaçışı yapmaz.
+function moneyHtml(amount, currency = 'TRY') {
+    return escapeHtml(formatMoney(amount, currency));
+}
+
+async function fetchJson(url, options = {}) {
+    const response = await fetch(url, options);
+    let data = null;
+    try {
+        data = await response.json();
+    } catch (e) {}
+    if (!response.ok) {
+        if (response.status === 401) {
+            window.location.href = '/login';
+        }
+        throw new Error(data?.error || `HTTP ${response.status}`);
+    }
+    return data;
+}
+
 document.addEventListener('click', function(e) {
     const nav = document.getElementById('navLinks');
     const toggle = document.querySelector('.nav-toggle');
-    if (nav && !nav.contains(e.target) && !toggle.contains(e.target)) {
+    if (nav && toggle && !nav.contains(e.target) && !toggle.contains(e.target)) {
         nav.classList.remove('show');
     }
 });
@@ -47,92 +83,6 @@ function urlBase64ToUint8Array(base64String) {
     return outputArray;
 }
 
-async function subscribeToPush() {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-        alert('Tarayiciniz push notification desteklemiyor.');
-        return false;
-    }
-
-    try {
-        const permission = await Notification.requestPermission();
-        if (permission !== 'granted') {
-            alert('Bildirim izni verilmedi.');
-            return false;
-        }
-
-        const reg = await navigator.serviceWorker.ready;
-
-        const existingSubscription = await reg.pushManager.getSubscription();
-        if (existingSubscription) {
-            await existingSubscription.unsubscribe();
-        }
-
-        const keyRes = await fetch('/api/vapid-public-key');
-        const keyData = await keyRes.json();
-
-        const applicationServerKey = urlBase64ToUint8Array(keyData.public_key);
-        const subscription = await reg.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: applicationServerKey,
-        });
-
-        const deviceName = getDeviceName();
-        const subJson = subscription.toJSON();
-
-        const res = await fetch('/api/subscribe', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                subscription: subJson,
-                device_name: deviceName,
-            }),
-        });
-
-        if (res.status === 401) {
-            console.error('Oturum sona erdi, giris yapmaniz gerekiyor.');
-            return false;
-        }
-
-        if (res.ok) {
-            console.log('Push aboneligi basarili');
-            return true;
-        } else {
-            const err = await res.json();
-            console.error('Abonelik hatasi:', err);
-            return false;
-        }
-    } catch (err) {
-        console.error('Push abonelik hatasi:', err);
-        return false;
-    }
-}
-
-async function unsubscribeFromPush() {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-        return;
-    }
-
-    try {
-        const reg = await navigator.serviceWorker.ready;
-        const subscription = await reg.pushManager.getSubscription();
-
-        if (subscription) {
-            const endpoint = subscription.endpoint;
-            await subscription.unsubscribe();
-
-            await fetch('/api/unsubscribe', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ endpoint: endpoint }),
-            });
-
-            console.log('Push aboneligi iptal edildi');
-        }
-    } catch (err) {
-        console.error('Unsubscribe hatasi:', err);
-    }
-}
-
 async function isSubscribed() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
         return false;
@@ -149,24 +99,7 @@ async function isSubscribed() {
 
 async function sendTestNotification() {
     try {
-        const res = await fetch('/api/notifications/0/send-test', { method: 'POST' });
-
-        if (!res.ok) {
-            if (res.status === 401) {
-                alert('Oturumunuz sona erdi. Sayfayi yenileyip tekrar giris yapin.');
-            } else {
-                alert('Test bildirimi gonderilemedi (HTTP ' + res.status + ')');
-            }
-            return;
-        }
-
-        let data;
-        try {
-            data = await res.json();
-        } catch(e) {
-            alert('Beklenmeyen yanit. Oturumunuz sona ermis olabilir.');
-            return;
-        }
+        const data = await fetchJson('/api/notifications/send-test', { method: 'POST' });
         alert(data.message || 'Test bildirimi gonderildi');
     } catch (err) {
         alert('Test bildirimi gonderilemedi');
@@ -185,8 +118,7 @@ function getDeviceName() {
 
 async function checkAndShowNotifications() {
     try {
-        const res = await fetch('/api/notifications');
-        const notifications = await res.json();
+        const notifications = await fetchJson('/api/notifications');
 
         const container = document.getElementById('notificationsList');
         if (!container) return;
@@ -200,10 +132,11 @@ async function checkAndShowNotifications() {
             <div class="notification-item" id="notif-${n.id}">
                 <div class="notification-icon">&#128276;</div>
                 <div class="notification-content">
-                    <div class="notification-message">${n.message}</div>
-                    <div class="notification-meta">
-                        ${n.card_name ? '<span>' + n.card_name + '</span>' : ''}
-                        <span>${new Date(n.scheduled_at).toLocaleDateString('tr-TR')}</span>
+                <div class="notification-message">${escapeHtml(n.message)}</div>
+                <div class="notification-meta">
+                    ${n.card_name ? '<span>' + escapeHtml(n.card_name) + '</span>' : ''}
+                    <span>${escapeHtml(new Date(n.scheduled_at).toLocaleDateString('tr-TR'))}</span>
+
                     </div>
                 </div>
                 <button class="btn btn-sm btn-secondary" onclick="dismissNotification(${n.id})">Kapat</button>
@@ -216,11 +149,9 @@ async function checkAndShowNotifications() {
 
 async function dismissNotification(notifId) {
     try {
-        const res = await fetch('/api/notifications/' + notifId + '/dismiss', { method: 'POST' });
-        if (res.ok) {
-            const el = document.getElementById('notif-' + notifId);
-            if (el) el.remove();
-        }
+        await fetchJson('/api/notifications/' + notifId + '/dismiss', { method: 'POST' });
+        const el = document.getElementById('notif-' + notifId);
+        if (el) el.remove();
     } catch (err) {
         console.error('Bildirim kapatma hatasi:', err);
     }

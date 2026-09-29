@@ -58,7 +58,9 @@
     <div class="settings-section">
         <h3>Hesap</h3>
         <p class="text-muted">Giriş yapan: <strong>{{ current_user.username }}</strong></p>
-        <a href="{{ url_for('auth.logout') }}" class="btn btn-danger">Çıkış Yap</a>
+        <form action="{{ url_for('auth.logout') }}" method="POST">
+            <button type="submit" class="btn btn-danger">Çıkış Yap</button>
+        </form>
     </div>
 </div>
 {% endblock %}
@@ -101,7 +103,15 @@ async function saveSettings(e) {
         });
 
         if (res.ok) {
+            // Tema doğrudan uygulanır; sayfa yenilenince flash mesajı kaybolur.
+            const theme = document.documentElement.getAttribute('data-theme');
+            if (theme) {
+                document.documentElement.setAttribute('data-theme', data.theme);
+            }
             alert('Ayarlar kaydedildi.');
+        } else {
+            const err = await res.json();
+            alert(err.error || 'Ayarlar kaydedilemedi');
         }
     } catch (err) {
         console.error('Ayarlar kaydetme hatası:', err);

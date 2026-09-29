@@ -155,7 +155,7 @@ async function sendTest() {
     btn.disabled = true;
 
     try {
-        const res = await fetch('/api/notifications/0/send-test', { method: 'POST' });
+        const res = await fetch('/api/notifications/send-test', { method: 'POST' });
 
         if (!res.ok) {
             throw new Error('Sunucu hatasi (HTTP ' + res.status + ')');

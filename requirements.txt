@@ -3,6 +3,8 @@ Flask-SQLAlchemy==3.1.1
 Flask-Login==0.6.3
 Werkzeug==3.0.4
 APScheduler==3.10.4
+gunicorn==23.0.0
 py-vapid==1.9.4
 pywebpush==2.4.0
 psycopg2-binary==2.9.10
+holidays==0.80

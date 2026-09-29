@@ -2,13 +2,33 @@ services:
   - type: web
     name: kredi-kart-takip
     runtime: python
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python run.py
+    # APScheduler tek süreçte çalışmalı; bu yüzden gunicorn tek worker kullanır
+    # ve yalnızca web isteklerini sunar. Zamanlanmış işler uygulama içinde
+    # ENABLE_SCHEDULER ile yürütülür.
+    startCommand: gunicorn run:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
+    healthCheckPath: /login
     envVars:
       - key: SECRET_KEY
         generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: kredi-kart-takip-db
+          property: connectionString
+      - key: ENABLE_SCHEDULER
+        value: "true"
+      # VAPID anahtarları ortamda sabit tutulmalı; aksi halde her yeniden
+      # başlatmada yeni anahtar üretilir ve mevcut push abonelikleri bozulur.
+      # `python -c "from app.vapid_keys import _write_keys, get_vapid_keys; _write_keys(get_vapid_keys())"`
+      # ile üretilip buraya yapıştırılmalıdır.
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
 
 databases:
   - name: kredi-kart-takip-db
     plan: free
     databaseName: kredi_kart_takip
+    postgresMajorVersion: "16"

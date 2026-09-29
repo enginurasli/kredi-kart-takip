@@ -1,5 +1,11 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, UTC
+from zoneinfo import ZoneInfo
 import calendar
+
+from holidays import country_holidays
+
+
+APP_TIMEZONE = ZoneInfo("Europe/Istanbul")
 
 
 TURKISH_HOLIDAYS_STATIC = {
@@ -42,23 +48,10 @@ def get_sacrifice_holiday(year):
 
 
 def get_turkish_holidays(year):
-    holidays = {}
-
-    for (m, d), name in TURKISH_HOLIDAYS_STATIC.items():
-        try:
-            holidays[date(year, m, d)] = name
-        except ValueError:
-            pass
-
-    ramadan = get_ramadan_holiday(year)
-    for i in range(4):
-        holidays[ramadan + timedelta(days=i)] = "Ramazan Bayramı"
-
-    sacrifice = get_sacrifice_holiday(year)
-    for i in range(4):
-        holidays[sacrifice + timedelta(days=i)] = "Kurban Bayramı"
-
-    return holidays
+    return {
+        day: name
+        for day, name in country_holidays("TR", years=[year]).items()
+    }
 
 
 def is_holiday(check_date):
@@ -97,8 +90,37 @@ def calculate_statement_date(year, month, statement_day):
     return date(year, month, actual_day)
 
 
+def calculate_statement_date_for_due(due_date, statement_day):
+    statement_date = calculate_statement_date(
+        due_date.year,
+        due_date.month,
+        statement_day,
+    )
+    if statement_date >= due_date:
+        previous_month = due_date.month - 1 or 12
+        previous_year = due_date.year - 1 if due_date.month == 1 else due_date.year
+        statement_date = calculate_statement_date(
+            previous_year,
+            previous_month,
+            statement_day,
+        )
+    return statement_date
+
+
+def get_today():
+    return datetime.now(APP_TIMEZONE).date()
+
+
+def get_utc_now():
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def get_app_datetime():
+    return datetime.now(APP_TIMEZONE)
+
+
 def days_until(target_date):
-    today = date.today()
+    today = get_today()
     delta = target_date - today
     return delta.days
 
@@ -120,7 +142,7 @@ def format_date_short(d):
 
 
 def get_current_month_payments(cards):
-    today = date.today()
+    today = get_today()
     current_month = today.month
     current_year = today.year
 

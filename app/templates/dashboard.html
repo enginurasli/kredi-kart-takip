@@ -43,17 +43,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
 async function loadDashboard() {
     try {
-        const [dashboardRes, upcomingRes] = await Promise.all([
-            fetch('/api/dashboard'),
-            fetch('/api/payments/upcoming')
+        const [dashboard, upcoming] = await Promise.all([
+            fetchJson('/api/dashboard'),
+            fetchJson('/api/payments/upcoming')
         ]);
 
-        const dashboard = await dashboardRes.json();
-        const upcoming = await upcomingRes.json();
-
         document.getElementById('todayDate').textContent = dashboard.today;
-        document.getElementById('totalAmount').textContent = formatMoney(dashboard.total_month);
+        document.getElementById('totalAmount').textContent = moneyHtml(dashboard.total_month);
         document.getElementById('unpaidCount').textContent = dashboard.unpaid_count + ' ödeme';
+
 
         if (dashboard.next_payment) {
             document.getElementById('nextPayment').textContent =
@@ -77,11 +75,11 @@ async function loadDashboard() {
                     <span class="status-dot status-${item.status_color}"></span>
                     <span class="days-left">${item.days_left} gün kaldı</span>
                 </div>
-                <div class="payment-card-name">${item.card_name}</div>
-                <div class="payment-amount">${formatMoney(item.amount)}</div>
-                <div class="payment-due">Son ödeme: ${item.due_date_tr}</div>
+                <div class="payment-card-name">${escapeHtml(item.card_name)}</div>
+                <div class="payment-amount">${moneyHtml(item.amount, item.currency)}</div>
+                <div class="payment-due">Son ödeme: ${escapeHtml(item.due_date_tr)}</div>
                 ${item.is_paid ? '<div class="payment-paid-badge">✓ Ödendi</div>' : ''}
-                ${!item.is_paid ? `
+                ${!item.is_paid && item.payment_id ? `
                 <button class="btn btn-success btn-sm" onclick="markPaid(${item.payment_id})">
                     Ödendi İşaretle
                 </button>
@@ -105,15 +103,6 @@ async function markPaid(paymentId) {
     } catch (err) {
         console.error('Ödeme işaretleme hatası:', err);
     }
-}
-
-function formatMoney(amount) {
-    return new Intl.NumberFormat('tr-TR', {
-        style: 'currency',
-        currency: 'TRY',
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 0
-    }).format(amount);
 }
 </script>
 {% endblock %}
