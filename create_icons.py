@@ -10,6 +10,10 @@ import zlib
 # Material 3 tonal palet (primary / primary container / surface variant)
 CARD_TOP = (42, 118, 234)
 CARD_BOTTOM = (11, 87, 208)
+# Maskable sürümde zemin CARD_TOP/CARD_BOTTOM ile doldurulduğu için kart
+# koyu lacivert kullanılır; aksi halde kart zeminde kaybolur.
+MASK_CARD_TOP = (16, 33, 58)
+MASK_CARD_BOTTOM = (7, 18, 34)
 STRIPE = (232, 234, 237)
 CHIP_TOP = (246, 211, 101)
 CHIP_BOTTOM = (217, 164, 65)
@@ -103,14 +107,15 @@ def _draw_icon(size, maskable=False):
 
     if maskable:
         # Android maskesi kenarı kırpar; içerik dairenin içinde kalmalı.
-        # Bu yüzden tüm kanvas mavi tonlu zeminle doldurulur ve kart %56
-        # çapın içine küçültülür.
+        # Zemin mavi olduğu için kart açık renkte olmalı, yoksa kart
+        # zeminle aynı görünür ve ikon düz bir mavi kareye dönüşür.
         for y in range(out_w):
             row = canvas[y]
             for x in range(out_w):
                 t = (y + 0.5) / out_w
                 row[x] = _lerp(CARD_TOP, CARD_BOTTOM, t) + (255,)
 
+        card_top, card_bottom = MASK_CARD_TOP, MASK_CARD_BOTTOM
         shrink = 0.72
         cx, cy = 0.5 * scale, 0.5 * scale
         half = 0.5 * shrink * scale
@@ -118,6 +123,7 @@ def _draw_icon(size, maskable=False):
         card_y0, card_y1 = cy - half * 0.62, cy + half * 0.62
         card_r = 0.055 * scale
     else:
+        card_top, card_bottom = CARD_TOP, CARD_BOTTOM
         # M3 "large" köşe yarıçapı; ölçüler dairesel maskeye de sığacak şekilde.
         card_x0, card_x1 = 0.15 * scale, 0.85 * scale
         card_y0, card_y1 = 0.30 * scale, 0.70 * scale
@@ -156,7 +162,7 @@ def _draw_icon(size, maskable=False):
             px, py, card_x0, card_y0, card_x1, card_y1, card_r
         ),
         lambda px, py: _lerp(
-            CARD_TOP, CARD_BOTTOM, (py - card_y0) / (card_y1 - card_y0)
+            card_top, card_bottom, (py - card_y0) / (card_y1 - card_y0)
         ),
     )
 

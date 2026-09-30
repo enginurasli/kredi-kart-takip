@@ -975,6 +975,75 @@ class TestAppIcons:
             opaque = sum(1 for row in pixels for p in row if p[3] > 200)
             assert opaque == width * width, f'{name}.png tam kapali degil'
 
+    @staticmethod
+    def _relative_luminance(color):
+        def channel(value):
+            value /= 255
+            if value <= 0.03928:
+                return value / 12.92
+            return ((value + 0.055) / 1.055) ** 2.4
+        return (
+            0.2126 * channel(color[0])
+            + 0.7152 * channel(color[1])
+            + 0.0722 * channel(color[2])
+        )
+
+    @classmethod
+    def _contrast(cls, first, second):
+        lum_a = cls._relative_luminance(first)
+        lum_b = cls._relative_luminance(second)
+        hi, lo = max(lum_a, lum_b), min(lum_a, lum_b)
+        return (hi + 0.05) / (lo + 0.05)
+
+    def test_maskable_card_is_visible_against_its_background(self):
+        """KOD14: maske ikonunda kart zeminde kaybolmamali.
+
+        Zemin mavi oldugu icin kart once de maviydi ve ikon duz bir mavi
+        kareye donusuyordu. Kart ile zemin kontrasti en az 1.6 olmali.
+        """
+        for name in ('icon-maskable-192', 'icon-maskable-512'):
+            width, height, pixels = _read_png(self._icon_dir() / f'{name}.png')
+            background = pixels[2][2][:3]
+            # Kart govdesinin sol-alt bolgesi: serit ve cip bu alanda degil.
+            card = pixels[int(height * 0.70)][int(width * 0.50)][:3]
+            ratio = self._contrast(card, background)
+            assert ratio >= 1.6, (
+                f'{name}.png kart zeminde kayboluyor: kontrast {ratio:.2f}:1 '
+                f'(kart {card}, zemin {background})'
+            )
+
+    def test_maskable_details_contrast_with_card(self):
+        """Serit, cip ve beyaz detay kart uzerinde okunabilir olmali."""
+        for name in ('icon-maskable-192', 'icon-maskable-512'):
+            width, height, pixels = _read_png(self._icon_dir() / f'{name}.png')
+            card = pixels[int(height * 0.70)][int(width * 0.50)][:3]
+
+            def most_common(predicate):
+                counts = {}
+                for row in pixels:
+                    for p in row:
+                        if p[3] > 200 and predicate(p):
+                            counts[p[:3]] = counts.get(p[:3], 0) + 1
+                assert counts, f'{name}.png beklenen detay bulunamadi'
+                return max(counts, key=counts.get)
+
+            stripe = most_common(
+                lambda p: abs(p[0] - 232) < 10 and abs(p[1] - 234) < 10
+                and abs(p[2] - 237) < 10
+            )
+            chip = most_common(lambda p: 195 < p[0] < 252 and p[1] > 155 and p[2] < 150)
+            white = most_common(lambda p: min(p) > 245)
+
+            for label, color, minimum in (
+                ('serit', stripe, 3.0),
+                ('cip', chip, 2.0),
+                ('beyaz', white, 3.0),
+            ):
+                ratio = self._contrast(color, card)
+                assert ratio >= minimum, (
+                    f'{name}.png {label} kart uzerinde okunmuyor: {ratio:.2f}:1'
+                )
+
     def test_maskable_content_inside_safe_zone(self):
         """Guvenli alan disindaki icerik Android maskesinde kirpilir."""
         for name in ('icon-maskable-192', 'icon-maskable-512'):
