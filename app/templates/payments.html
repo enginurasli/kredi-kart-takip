@@ -37,11 +37,14 @@ async function loadPayments() {
                     <span class="payment-amount">${moneyHtml(p.amount, p.currency)}</span>
                 </div>
                 <div class="payment-meta">
-                    <span>Son Ödeme: ${escapeHtml(p.due_date)}</span>
+                    <span>Son Ödeme: ${escapeHtml(p.due_date_tr || p.due_date)}</span>
                     <span class="days-left ${getDaysClass(p.days_left)}">
                         ${p.days_left > 0 ? p.days_left + ' gün kaldı' : 'Geçti'}
                     </span>
                 </div>
+                ${p.due_date_shifted_to
+                    ? `<div class="payment-shift">${escapeHtml(p.due_date_shifted_to)} nedeniyle kaydırıldı</div>`
+                    : ''}
                 <div class="payment-status">
                     ${p.is_paid ?
                         '<span class="badge badge-success">Ödendi</span>' :

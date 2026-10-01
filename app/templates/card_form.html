@@ -19,17 +19,20 @@
                    placeholder="Örn: Bonus, World, Axess">
         </div>
 
-        <div class="form-row">
-            <div class="form-group">
-                <label for="statement_day">Hesap Kesim Günü</label>
-                <input type="number" id="statement_day" name="statement_day" required
-                       min="1" max="31" placeholder="15">
-            </div>
-            <div class="form-group">
-                <label for="due_day">Son Ödeme Günü</label>
-                <input type="number" id="due_day" name="due_day" required
-                       min="1" max="31" placeholder="25">
-            </div>
+        <div class="form-group">
+            <label for="statement_day">Hesap Kesim Günü</label>
+            <input type="number" id="statement_day" name="statement_day" required
+                   min="1" max="31" placeholder="15"
+                   oninput="schedulePreview()">
+            <small class="form-hint">
+                Son ödeme tarihi hesap kesim tarihine 10 gün eklenerek bulunur.
+                Resmî tatil veya hafta sonuna denk gelirse bir sonraki iş gününe kayar.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label>Son Ödeme Tarihi</label>
+            <div class="due-preview" id="duePreview">Hesap kesim gününü girin.</div>
         </div>
 
         <div class="form-row">
@@ -79,6 +82,47 @@
 <script>
 const cardId = {{ card_id|tojson }};
 let isEditing = false;
+let previewTimer = null;
+
+async function updateDuePreview() {
+    const preview = document.getElementById('duePreview');
+    const raw = document.getElementById('statement_day').value;
+    const day = parseInt(raw, 10);
+
+    if (!day || day < 1 || day > 31) {
+        preview.textContent = raw ? 'Gün 1-31 arasında olmalı.' : 'Hesap kesim gününü girin.';
+        preview.className = 'due-preview';
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/due-date-preview?statement_day=${day}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Hesaplanamadı');
+
+        let html = `<strong>${escapeHtml(data.due_date_tr)}</strong>`;
+        html += `<span class="due-preview-note">Hesap kesim: ${escapeHtml(data.statement_date_tr)}</span>`;
+        if (data.shifted_to_holiday) {
+            html += `<span class="due-preview-note due-preview-holiday">` +
+                    `Resmî tatile denk geldiği için ${escapeHtml(data.shifted_to_holiday)}` +
+                    ` sonrasına kaydırıldı.</span>`;
+        } else if (data.days_left >= 0) {
+            html += `<span class="due-preview-note">${data.days_left} gün kaldı</span>`;
+        }
+        preview.innerHTML = html;
+        preview.className = data.shifted_to_holiday
+            ? 'due-preview due-preview-shifted'
+            : 'due-preview';
+    } catch (err) {
+        preview.textContent = 'Son ödeme tarihi hesaplanamadı.';
+        preview.className = 'due-preview';
+    }
+}
+
+function schedulePreview() {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(updateDuePreview, 250);
+}
 
 document.addEventListener('DOMContentLoaded', async function() {
     if (cardId) {
@@ -93,15 +137,17 @@ document.addEventListener('DOMContentLoaded', async function() {
             document.getElementById('bank_name').value = card.bank_name;
             document.getElementById('card_name').value = card.card_name;
             document.getElementById('statement_day').value = card.statement_day;
-            document.getElementById('due_day').value = card.due_day;
             document.getElementById('current_balance').value = card.current_balance;
             document.getElementById('currency').value = card.currency;
             document.getElementById('reminder_days').value = card.reminder_days;
             document.getElementById('note').value = card.note || '';
             document.getElementById('is_active').checked = card.is_active;
+            updateDuePreview();
         } catch (err) {
             console.error('Kart yükleme hatası:', err);
         }
+    } else {
+        updateDuePreview();
     }
 });
 
@@ -112,7 +158,6 @@ async function submitCard(e) {
         bank_name: document.getElementById('bank_name').value,
         card_name: document.getElementById('card_name').value,
         statement_day: parseInt(document.getElementById('statement_day').value),
-        due_day: parseInt(document.getElementById('due_day').value),
         current_balance: parseFloat(document.getElementById('current_balance').value),
         currency: document.getElementById('currency').value,
         reminder_days: parseInt(document.getElementById('reminder_days').value) || 2,

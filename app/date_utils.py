@@ -78,33 +78,49 @@ def get_next_working_day(check_date):
     return check_date
 
 
-def calculate_due_date(year, month, due_day):
-    last_day = calendar.monthrange(year, month)[1]
-    actual_day = min(due_day, last_day)
-    return date(year, month, actual_day)
-
-
 def calculate_statement_date(year, month, statement_day):
     last_day = calendar.monthrange(year, month)[1]
     actual_day = min(statement_day, last_day)
     return date(year, month, actual_day)
 
 
-def calculate_statement_date_for_due(due_date, statement_day):
-    statement_date = calculate_statement_date(
-        due_date.year,
-        due_date.month,
-        statement_day,
-    )
-    if statement_date >= due_date:
-        previous_month = due_date.month - 1 or 12
-        previous_year = due_date.year - 1 if due_date.month == 1 else due_date.year
-        statement_date = calculate_statement_date(
-            previous_year,
-            previous_month,
-            statement_day,
-        )
-    return statement_date
+# Türkiye'de kredi kartı son ödeme tarihi hesap kesim tarihine göre belirlenir:
+# vade, hesap kesim gününün üzerine 10 gün eklenerek hesaplanır. Son ödeme
+# günü hafta sonu veya resmi tatile denk gelirse ödeme, bir sonraki iş gününe
+# uzatılır. Bu yüzden son ödeme günü her ay değişebilir, hesap kesim günü ise
+# sabittir.
+DUE_DATE_OFFSET_DAYS = 10
+
+
+def calculate_payment_due_date(year, month, statement_day):
+    """Hesap kesim gününden son ödeme tarihini türetir.
+
+    Son ödeme tarihi resmî tatil veya hafta sonuna denk gelirse bir sonraki
+    iş gününe kaydırılır. Dönen değer ``(statement_date, due_date)`` çiftidir;
+    ``statement_date`` ekrana gösterilecek sabit kesim tarihidir.
+    """
+    statement_date = calculate_statement_date(year, month, statement_day)
+    due_date = statement_date + timedelta(days=DUE_DATE_OFFSET_DAYS)
+    due_date = get_next_working_day(due_date)
+    return statement_date, due_date
+
+
+def describe_due_date_shift(statement_date, due_date):
+    """Son ödeme tarihi neden kaydı, açıklama metni döndürür.
+
+    Vade günü resmî tatil veya hafta sonuna denk geldiyse kaydıran günün adını
+    (tatil adı ya da "Hafta sonu") verir, kaydırma yapılmadıysa ``None`` döner.
+    """
+    expected = statement_date + timedelta(days=DUE_DATE_OFFSET_DAYS)
+    if due_date == expected:
+        return None
+    return get_holiday_name(expected) or "Hafta sonu"
+
+
+
+def calculate_due_date_for_month(year, month, statement_day):
+    """Yalnızca son ödeme tarihini döndürür."""
+    return calculate_payment_due_date(year, month, statement_day)[1]
 
 
 def get_today():
@@ -151,20 +167,29 @@ def get_current_month_payments(cards):
         if not card.is_active:
             continue
 
-        due_date = calculate_due_date(current_year, current_month, card.due_day)
+        statement_date, due_date = calculate_payment_due_date(
+            current_year, current_month, card.statement_day
+        )
 
         if due_date < today:
             if current_month == 12:
-                due_date = calculate_due_date(current_year + 1, 1, card.due_day)
+                statement_date, due_date = calculate_payment_due_date(
+                    current_year + 1, 1, card.statement_day
+                )
             else:
-                due_date = calculate_due_date(current_year, current_month + 1, card.due_day)
+                statement_date, due_date = calculate_payment_due_date(
+                    current_year, current_month + 1, card.statement_day
+                )
 
         days_left = days_until(due_date)
         upcoming.append({
             "card": card,
+            "statement_date": statement_date,
             "due_date": due_date,
+            "shifted": describe_due_date_shift(statement_date, due_date),
             "days_left": days_left,
         })
 
     upcoming.sort(key=lambda x: x["days_left"])
     return upcoming
+

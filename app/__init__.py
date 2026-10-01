@@ -38,6 +38,66 @@ def _configure_sqlite():
     Engine._kart_takip_sqlite_configured = True
 
 
+def _backfill_statement_dates(connection):
+    """Mevcut ödemelerin statement_date'ini hesap kesim gününe göre düzeltir.
+
+    due_day kaldırılmadan önce statement_date, eski mantıkla (ödeme tarihinden
+    geriye doğru) hesaplanmıştı. Bu yardımcı, ödemeleri yeni kurala göre
+    yeniden hesaplar; SQLite ve PostgreSQL'in ortak SQL'i ile çalışır.
+    """
+    inspector = inspect(connection)
+    tables = set(inspector.get_table_names())
+    if "payments" not in tables or "cards" not in tables:
+        return inspector
+
+    payment_columns = {column["name"] for column in inspector.get_columns("payments")}
+    card_columns = {column["name"] for column in inspector.get_columns("cards")}
+    if not {"card_id", "month", "year"} <= payment_columns:
+        return inspector
+    if "statement_day" not in card_columns:
+        return inspector
+
+    dialect = connection.engine.dialect.name
+    month_expr = f'CAST(payments."month" AS TEXT)' if dialect == "postgresql" else 'payments.month'
+    year_expr = f'CAST(payments."year" AS TEXT)' if dialect == "postgresql" else 'payments.year'
+    if dialect == "postgresql":
+        connection.execute(text("""
+            UPDATE payments
+            SET statement_date = make_date(
+                    CAST(payments."year" AS INTEGER),
+                    payments."month",
+                    LEAST(
+                        cards.statement_day,
+                        EXTRACT(DAY FROM make_date(
+                            CAST(payments."year" AS INTEGER),
+                            payments."month",
+                            1
+                        ) + INTERVAL '1 month' - INTERVAL '1 day')
+                    )::INTEGER
+                )
+            FROM cards
+            WHERE payments.card_id = cards.id
+        """))
+    else:
+        connection.execute(text(f"""
+            UPDATE payments
+            SET statement_date = date(
+                printf('%04d-%02d-%02d', {year_expr}, {month_expr},
+                    MIN(
+                        cards.statement_day,
+                        CAST(strftime('%d', date({year_expr} || '-' ||
+                            printf('%02d', {month_expr}) || '-01', '+1 month', '-1 day'))
+                            AS INTEGER)
+                    )
+                )
+            )
+            FROM cards
+            WHERE payments.card_id = cards.id
+        """))
+    connection.commit()
+    return inspect(connection)
+
+
 def _migrate_schema(app):
     connection = db.engine.connect()
     try:
@@ -71,6 +131,18 @@ def _migrate_schema(app):
             if "reset_token_expires_at" not in columns:
                 connection.execute(text("ALTER TABLE users ADD COLUMN reset_token_expires_at FLOAT"))
             connection.commit()
+
+        if "cards" in tables:
+            # due_day kaldırıldı: son ödeme tarihi hesap kesim gününden
+            # türetiliyor. Sütun veritabanında NOT NULL kalırsa yeni kayıtlar
+            # başarısız olur, o yüzden düşürülür. Ödemelerin statement_date'i
+            # önce ORM üzerinden yeniden hesaplanır.
+            columns = {column["name"] for column in inspector.get_columns("cards")}
+            if "due_day" in columns:
+                inspector = _backfill_statement_dates(connection)
+                connection.execute(text("ALTER TABLE cards DROP COLUMN due_day"))
+                connection.commit()
+                inspector = inspect(connection)
 
         if "payments" in tables:
             columns = {column["name"] for column in inspector.get_columns("payments")}

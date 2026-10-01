@@ -32,7 +32,6 @@ class Card(db.Model):
     __tablename__ = "cards"
     __table_args__ = (
         CheckConstraint("statement_day BETWEEN 1 AND 31", name="ck_cards_statement_day"),
-        CheckConstraint("due_day BETWEEN 1 AND 31", name="ck_cards_due_day"),
         CheckConstraint("current_balance >= 0", name="ck_cards_current_balance"),
         CheckConstraint("reminder_days BETWEEN 1 AND 30", name="ck_cards_reminder_days"),
     )
@@ -41,8 +40,9 @@ class Card(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     bank_name = db.Column(db.String(100), nullable=False)
     card_name = db.Column(db.String(100), nullable=False)
+    # Hesap kesim günü sabittir; son ödeme tarihi bundan türetilir
+    # (date_utils.calculate_payment_due_date). due_day kaldırıldı.
     statement_day = db.Column(db.Integer, nullable=False)
-    due_day = db.Column(db.Integer, nullable=False)
     current_balance = db.Column(db.Float, default=0.0)
     currency = db.Column(db.String(10), default="TRY")
     reminder_days = db.Column(db.Integer, default=2)
@@ -56,14 +56,50 @@ class Card(db.Model):
     def full_name(self):
         return f"{self.bank_name} {self.card_name}"
 
-    def to_dict(self):
+    def _next_statement_and_due(self, reference_date):
+        from app.date_utils import calculate_payment_due_date
+
+        today = reference_date
+        statement_date, due_date = calculate_payment_due_date(
+            today.year, today.month, self.statement_day
+        )
+        if due_date < today:
+            year = today.year + 1 if today.month == 12 else today.year
+            month = 1 if today.month == 12 else today.month + 1
+            statement_date, due_date = calculate_payment_due_date(
+                year, month, self.statement_day
+            )
+        return statement_date, due_date
+
+    def current_due_date(self, reference_date=None):
+        """Bu kartın bir sonraki son ödeme tarihi.
+
+        Hesap kesim gününe 10 gün eklenir, resmî tatil ve hafta sonuna denk
+        gelirse bir sonraki iş gününe kaydırılır.
+        """
+        from app.date_utils import get_today
+
+        return self._next_statement_and_due(reference_date or get_today())[1]
+
+    def to_dict(self, reference_date=None):
+        from app.date_utils import (
+            describe_due_date_shift,
+            format_date_short,
+            get_today,
+        )
+
+        today = reference_date or get_today()
+        statement_date, due_date = self._next_statement_and_due(today)
         return {
             "id": self.id,
             "bank_name": self.bank_name,
             "card_name": self.card_name,
             "full_name": self.full_name,
             "statement_day": self.statement_day,
-            "due_day": self.due_day,
+            "statement_date": format_date_short(statement_date),
+            "due_date": format_date_short(due_date),
+            "due_date_iso": due_date.isoformat(),
+            "due_date_shifted": describe_due_date_shift(statement_date, due_date),
             "current_balance": self.current_balance,
             "currency": self.currency,
             "reminder_days": self.reminder_days,

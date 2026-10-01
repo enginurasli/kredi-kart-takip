@@ -11,6 +11,7 @@ from app.models import Card, Payment, Notification, Setting, Device
 from app.date_utils import (
     days_until, format_date_tr, format_date_short,
     get_current_month_payments, get_today, get_utc_now,
+    calculate_payment_due_date, describe_due_date_shift,
     is_non_working_day, get_holiday_name
 )
 from app.notifications import (
@@ -112,7 +113,6 @@ def create_card():
             bank_name=parse_text(data, "bank_name", required=True),
             card_name=parse_text(data, "card_name", required=True),
             statement_day=parse_int(data, "statement_day", 1, 31),
-            due_day=parse_int(data, "due_day", 1, 31),
             current_balance=parse_balance(data),
             currency=parse_text(data, "currency") or setting.currency or "TRY",
             reminder_days=parse_int(data, "reminder_days", 1, 30, setting.default_reminder_days),
@@ -158,8 +158,6 @@ def update_card(card_id):
             card.card_name = parse_text(data, "card_name", required=True)
         if "statement_day" in data:
             card.statement_day = parse_int(data, "statement_day", 1, 31)
-        if "due_day" in data:
-            card.due_day = parse_int(data, "due_day", 1, 31)
         if "current_balance" in data:
             card.current_balance = parse_balance(data)
         if "currency" in data:
@@ -208,8 +206,8 @@ def cleanup_notifications():
 @login_required
 def get_payments():
     # Not: Ödemeler takvim ayına göre değil, gerçek vade tarihine göre listelenir.
-    # due_day bu ayın içinde geçmiş bir güne denk gelen kartlarda vade bir sonraki
-    # aya kaydığı için ay bazlı filtre sayfayı boş gösteriyordu.
+    # Hesap kesim günü bu ayın içinde geçmiş bir güne denk gelen kartlarda vade bir
+    # sonraki aya kaydığı için ay bazlı filtre sayfayı boş gösteriyordu.
     today = get_today()
     period_start = today.replace(day=1)
     payments = (
@@ -263,6 +261,9 @@ def get_upcoming_payments():
                 "status_color": get_status_color(days_left),
                 "holiday_name": get_holiday_name(due_date),
                 "is_holiday_or_weekend": is_non_working_day(due_date),
+                "statement_date": item["statement_date"].isoformat(),
+                "statement_date_tr": format_date_tr(item["statement_date"]),
+                "due_date_shifted_to": item["shifted"],
             })
             continue
 
@@ -281,6 +282,11 @@ def get_upcoming_payments():
             "status_color": get_status_color(days_left),
             "holiday_name": get_holiday_name(payment.due_date),
             "is_holiday_or_weekend": is_non_working_day(payment.due_date),
+            "statement_date": payment.statement_date.isoformat(),
+            "statement_date_tr": format_date_tr(payment.statement_date),
+            "due_date_shifted_to": describe_due_date_shift(
+                payment.statement_date, payment.due_date
+            ),
         })
 
     return jsonify(result)
@@ -481,6 +487,42 @@ def get_status_color(days_left):
 @api_bp.route("/vapid-public-key", methods=["GET"])
 def vapid_public_key():
     return jsonify({"public_key": get_public_key()})
+
+
+@api_bp.route("/due-date-preview", methods=["GET"])
+@login_required
+def due_date_preview():
+    """Hesap kesim gününden son ödeme tarihini önizler.
+
+    Tatil ve hafta sonu kaydırması yalnızca sunucuda hesaplanabilir; form
+    bu uç noktayı kullanarak kullanıcıya nihai tarihi gösterir.
+    """
+    try:
+        statement_day = parse_int(request.args, "statement_day", 1, 31)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    today = get_today()
+    year = request.args.get("year", type=int) or today.year
+    month = request.args.get("month", type=int) or today.month
+    if not 1 <= month <= 12:
+        return jsonify({"error": "month 1-12 arasında olmalı"}), 400
+
+    try:
+        statement_date, due_date = calculate_payment_due_date(year, month, statement_day)
+    except (ValueError, OverflowError):
+        return jsonify({"error": "Tarih hesaplanamadı"}), 400
+
+    return jsonify({
+        "statement_day": statement_day,
+        "statement_date": statement_date.isoformat(),
+        "statement_date_tr": format_date_tr(statement_date),
+        "due_date": due_date.isoformat(),
+        "due_date_tr": format_date_tr(due_date),
+        "due_date_short": format_date_short(due_date),
+        "days_left": days_until(due_date),
+        "shifted_to_holiday": describe_due_date_shift(statement_date, due_date),
+    })
 
 
 @api_bp.route("/subscribe", methods=["POST"])

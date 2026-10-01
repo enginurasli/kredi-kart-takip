@@ -44,7 +44,7 @@ async function loadCards() {
                 <div class="card-balance">${moneyHtml(card.current_balance, card.currency)}</div>
                 <div class="card-details">
                     <span>Kesim: ${card.statement_day}</span>
-                    <span>Son Ödeme: ${card.due_day}</span>
+                    <span>Son Ödeme: ${escapeHtml(card.due_date || '-')}</span>
                 </div>
                 <div class="card-actions">
                     <a href="/cards/${card.id}" class="btn btn-sm">Detay</a>

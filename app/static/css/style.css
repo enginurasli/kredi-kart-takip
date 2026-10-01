@@ -182,6 +182,52 @@ body {
     gap: 12px;
 }
 
+.form-hint {
+    display: block;
+    margin-top: 6px;
+    font-size: 0.82rem;
+    line-height: 1.4;
+    color: var(--text-muted);
+}
+
+.due-preview {
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--hover-bg);
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    line-height: 1.5;
+    min-height: 44px;
+}
+
+.due-preview strong {
+    display: block;
+    color: var(--text);
+    font-size: 1.05rem;
+}
+
+.due-preview-note {
+    display: block;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
+.due-preview-shifted {
+    border-color: var(--warning);
+    background: var(--warning-soft);
+}
+
+.due-preview-holiday {
+    color: var(--warning);
+}
+
+.due-shift-note {
+    display: block;
+    font-size: 0.78rem;
+    color: var(--warning);
+}
+
 .checkbox-label {
     display: flex !important;
     align-items: center;
@@ -393,6 +439,15 @@ body {
 
 .payment-status {
     margin-top: 8px;
+}
+
+.payment-shift {
+    margin-bottom: 8px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: var(--warning-soft);
+    color: var(--warning);
+    font-size: 0.78rem;
 }
 
 .badge {

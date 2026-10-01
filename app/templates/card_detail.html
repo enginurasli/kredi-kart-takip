@@ -54,7 +54,12 @@ async function loadCardDetail() {
                 </div>
                 <div class="detail-item">
                     <span class="detail-label">Son Ödeme</span>
-                    <span class="detail-value">Her ayın ${card.due_day}</span>
+                    <span class="detail-value">
+                        ${escapeHtml(card.due_date || '-')}
+                        ${card.due_date_shifted
+                            ? `<span class="due-shift-note">${escapeHtml(card.due_date_shifted)} sonrasına kaydırıldı</span>`
+                            : ''}
+                    </span>
                 </div>
                 <div class="detail-item">
                     <span class="detail-label">Güncel Borç</span>

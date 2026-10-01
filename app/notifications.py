@@ -4,8 +4,7 @@ from sqlalchemy.exc import IntegrityError
 from app import db
 from app.date_utils import (
     APP_TIMEZONE,
-    calculate_due_date,
-    calculate_statement_date_for_due,
+    calculate_payment_due_date,
     get_today,
     get_utc_now,
 )
@@ -185,7 +184,11 @@ def generate_notifications_for_upcoming_payments(user_id, commit=True):
             target_month = today.month + month_offset
             target_year = today.year + (target_month - 1) // 12
             target_month = (target_month - 1) % 12 + 1
-            due_date = calculate_due_date(target_year, target_month, card.due_day)
+            # Son ödeme tarihi hesap kesim gününden türetilir; bankalar vade
+            # gününü resmî tatile denk gelirse bir sonraki iş gününe uzatır.
+            statement_date, due_date = calculate_payment_due_date(
+                target_year, target_month, card.statement_day
+            )
             if due_date < today:
                 continue
 
@@ -200,10 +203,7 @@ def generate_notifications_for_upcoming_payments(user_id, commit=True):
                     amount=card.current_balance,
                     currency=card.currency,
                     due_date=due_date,
-                    statement_date=calculate_statement_date_for_due(
-                        due_date,
-                        card.statement_day,
-                    ),
+                    statement_date=statement_date,
                     month=target_month,
                     year=target_year,
                 )
@@ -212,10 +212,7 @@ def generate_notifications_for_upcoming_payments(user_id, commit=True):
             elif not payment.is_paid:
                 # Ödenmemiş ödeme kartın güncel verisine göre senkronlanır.
                 payment.due_date = due_date
-                payment.statement_date = calculate_statement_date_for_due(
-                    due_date,
-                    card.statement_day,
-                )
+                payment.statement_date = statement_date
                 payment.amount = card.current_balance
                 payment.currency = card.currency
                 db.session.flush()

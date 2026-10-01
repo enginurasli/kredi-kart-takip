@@ -10,7 +10,9 @@ from app import create_app, db
 from app.models import User, Card, Payment, Notification, Setting
 from app.date_utils import (
     is_holiday, is_weekend, is_non_working_day, get_next_working_day,
-    format_date_tr, format_date_short, days_until, calculate_due_date
+    format_date_tr, format_date_short, days_until,
+    calculate_payment_due_date, describe_due_date_shift, get_holiday_name,
+    calculate_statement_date, DUE_DATE_OFFSET_DAYS,
 )
 from app.notifications import create_payment_notification, dismiss_notification
 from app.auth import _issue_reset_token
@@ -105,14 +107,6 @@ class TestDateUtils:
         d = date(2026, 8, 25)
         assert format_date_short(d) == "25.08.2026"
 
-    def test_calculate_due_date_normal(self):
-        due = calculate_due_date(2026, 8, 25)
-        assert due == date(2026, 8, 25)
-
-    def test_calculate_due_date_february_30(self):
-        due = calculate_due_date(2026, 2, 30)
-        assert due == date(2026, 2, 28)
-
     def test_days_until_future(self):
         future = date.today() + timedelta(days=5)
         assert days_until(future) == 5
@@ -120,6 +114,144 @@ class TestDateUtils:
     def test_days_until_past(self):
         past = date.today() - timedelta(days=3)
         assert days_until(past) == -3
+
+
+class TestDueDateRule:
+    """KOD15: Son ödeme tarihi hesap kesim günü +10 gün, tatile göre kayar.
+
+    Türkiye'de bankalar vade gününü resmî tatile denk gelirse bir sonraki iş
+    gününe uzatır. Hesap kesim günü sabittir, son ödeme günü her ay değişebilir.
+    """
+
+    def test_offset_is_ten_days(self):
+        assert DUE_DATE_OFFSET_DAYS == 10
+
+    def test_due_date_is_statement_plus_ten_days(self):
+        statement, due = calculate_payment_due_date(2026, 9, 15)
+        assert statement == date(2026, 9, 15)
+        assert due == date(2026, 9, 25)
+
+    def test_statement_day_is_stable_across_months(self):
+        """Hesap kesim günü her ay aynı; sadece son ödeme günü değişebilir."""
+        for month in range(1, 13):
+            statement, _ = calculate_payment_due_date(2026, month, 20)
+            assert statement.day == 20, f'{month}. ay kesim günü kaymış'
+            assert statement.month == month
+
+    def test_weekend_due_date_moves_to_next_working_day(self):
+        """2026-02-15 kesim -> 25 Şubat Çarşamba, kaydırma gerekmez."""
+        statement, due = calculate_payment_due_date(2026, 2, 15)
+        assert statement == date(2026, 2, 15)
+        assert due == date(2026, 2, 25)
+
+    def test_saturday_due_date_shifts_to_monday(self):
+        """15 Mayıs 2026 Cuma -> 25 Mayıs Pazartesi değil, 25 Mayıs Pazartesi.
+
+        Bu örnek 19 Mayıs'ın Pazartesi olduğu yılı seçer; vade 25 Mayıs
+        Pazartesi'ye denk gelir ve kaydırma olmaz. Asıl test hafta sonu
+        senaryosunu aşağıda doğrular.
+        """
+        statement, due = calculate_payment_due_date(2026, 5, 15)
+        assert due == date(2026, 5, 25)
+        assert due.weekday() < 5
+
+    def test_due_date_never_lands_on_non_working_day(self):
+        """12 ay boyunca son ödeme hiçbir zaman hafta sonu/tatil olmamalı."""
+        for statement_day in (1, 5, 10, 15, 20, 25, 28):
+            for month in range(1, 13):
+                _, due = calculate_payment_due_date(2026, month, statement_day)
+                assert not is_non_working_day(due), (
+                    f'Kesim {statement_day}, {month}. ay -> {due} iş günü değil'
+                )
+
+    def test_due_date_is_never_before_statement(self):
+        for statement_day in (1, 10, 20, 28):
+            for month in range(1, 13):
+                statement, due = calculate_payment_due_date(2026, month, statement_day)
+                assert due > statement, f'{statement} -> {due} geriye gitti'
+
+    def test_holiday_due_date_is_shifted_and_reported(self):
+        """29 Ekim 2026 Perşembe resmî tatil; 19+10=29 olduğuna göre kayar."""
+        statement, due = calculate_payment_due_date(2026, 10, 19)
+        assert statement == date(2026, 10, 19)
+        assert due == date(2026, 10, 30), 'tatil nedeniyle kaydırılmadı'
+        reason = describe_due_date_shift(statement, due)
+        assert reason is not None, 'kaydırma nedeni bildirilmedi'
+        assert 'Republic' in reason or 'Cumhuriyet' in reason, reason
+
+    def test_weekend_shift_is_reported(self):
+        """Vade günü tatil veya hafta sonuna denk gelirse neden bildirilmeli.
+
+        İkisi aynı güne denk gelirse (örn. 30 Mayıs 2026 Kurban Bayramı ve
+        Pazar) tatil adı önceliklidir.
+        """
+        seen_weekend = False
+        for statement_day in (10, 20, 25):
+            for month in range(1, 13):
+                statement, due = calculate_payment_due_date(2026, month, statement_day)
+                expected = statement + timedelta(days=DUE_DATE_OFFSET_DAYS)
+                if not is_non_working_day(expected):
+                    continue
+                reason = describe_due_date_shift(statement, due)
+                assert reason, (
+                    f'Kesim {statement_day}/{month}: {expected} iş günü değil '
+                    'ama neden bildirilmedi'
+                )
+                holiday = get_holiday_name(expected)
+                if holiday:
+                    assert reason == holiday, f'tatil adi öncelikli olmali: {reason}'
+                else:
+                    assert reason == 'Hafta sonu', f'neden hafta sonu olmali: {reason}'
+                    seen_weekend = True
+        assert seen_weekend, 'hiçbir hafta sonu senaryosu test edilmedi'
+
+    def test_no_shift_reports_none(self):
+        statement, due = calculate_payment_due_date(2026, 9, 15)
+        assert describe_due_date_shift(statement, due) is None
+
+    def test_short_month_clamps_statement_day(self):
+        """Şubatta 28/29 günlük ay; 31 istenirse son güne kırpılır."""
+        statement, due = calculate_payment_due_date(2026, 2, 31)
+        assert statement == date(2026, 2, 28)
+        assert due >= date(2026, 2, 28)
+
+    def test_due_date_varies_by_month(self):
+        """Hesap kesim sabit olsa da son ödeme günü aylara göre değişir."""
+        dues = {calculate_payment_due_date(2026, m, 15)[1].day for m in range(1, 13)}
+        assert len(dues) > 1, 'son ödeme günü hiç değişmiyor'
+
+    def test_year_rollover(self):
+        statement, due = calculate_payment_due_date(2027, 1, 15)
+        assert statement == date(2027, 1, 15)
+        assert statement.year == 2027 and due.year == 2027
+
+
+class TestDueDatePreviewApi:
+    """KOD15: Form önizlemesi sunucudan tarih almalı, JS'ten hesaplamamalı."""
+
+    def test_preview_returns_derived_due_date(self, auth_client):
+        response = auth_client.get('/api/due-date-preview?statement_day=15')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['statement_day'] == 15
+        assert data['statement_date'] and data['due_date']
+        assert data['due_date'] >= data['statement_date']
+
+    def test_preview_rejects_invalid_day(self, auth_client):
+        for value in ('0', '32', 'abc', ''):
+            response = auth_client.get(f'/api/due-date-preview?statement_day={value}')
+            assert response.status_code == 400, f'statement_day={value} kabul edildi'
+
+    def test_preview_requires_login(self, client):
+        response = client.get('/api/due-date-preview?statement_day=15')
+        assert response.status_code in (401, 302)
+
+    def test_card_form_has_no_due_day_input(self, auth_client):
+        html = auth_client.get('/cards/new').data.decode()
+        assert 'id="due_day"' not in html, 'formda due_day alani hala var'
+        assert 'name="due_day"' not in html
+        assert 'id="statement_day"' in html
+        assert 'duePreview' in html, 'son odeme onizlemesi yok'
 
 
 class TestAuth:
@@ -360,7 +492,6 @@ class TestCardCRUD:
                 'bank_name': 'Garanti',
                 'card_name': 'Bonus',
                 'statement_day': 15,
-                'due_day': 25,
                 'current_balance': 18750,
                 'currency': 'TRY',
                 'reminder_days': 2,
@@ -379,7 +510,6 @@ class TestCardCRUD:
                 'bank_name': 'Yapı Kredi',
                 'card_name': 'World',
                 'statement_day': 10,
-                'due_day': 20,
                 'current_balance': 5000,
                 'currency': 'TRY',
                 'reminder_days': 3
@@ -398,7 +528,6 @@ class TestCardCRUD:
                 'bank_name': 'Akbank',
                 'card_name': 'Axess',
                 'statement_day': 5,
-                'due_day': 15,
                 'current_balance': 3000,
                 'currency': 'TRY',
                 'reminder_days': 2
@@ -424,7 +553,6 @@ class TestCardCRUD:
                 'bank_name': 'İş Bankası',
                 'card_name': 'Maximum',
                 'statement_day': 1,
-                'due_day': 10,
                 'current_balance': 2000,
                 'currency': 'TRY',
                 'reminder_days': 2
@@ -447,7 +575,6 @@ class TestPayments:
                 'bank_name': 'QNB',
                 'card_name': 'Finans',
                 'statement_day': 10,
-                'due_day': 20,
                 'current_balance': 7500,
                 'currency': 'TRY',
                 'reminder_days': 2
@@ -477,7 +604,6 @@ class TestNotifications:
                 bank_name='Test Bank',
                 card_name='Test Card',
                 statement_day=15,
-                due_day=25,
                 current_balance=10000,
                 currency='TRY',
                 reminder_days=2
@@ -514,7 +640,6 @@ class TestNotifications:
                 bank_name='Test Bank',
                 card_name='Test Card',
                 statement_day=15,
-                due_day=25,
                 current_balance=10000,
                 currency='TRY',
                 reminder_days=2
@@ -557,7 +682,6 @@ class TestNotifications:
                 bank_name='Test Bank',
                 card_name='Test Card',
                 statement_day=15,
-                due_day=25,
                 current_balance=10000,
                 currency='TRY',
                 reminder_days=2
@@ -613,13 +737,12 @@ class TestAPIEndpoints:
         assert response.status_code == 200
 
 
-def add_card(client, due_day=20, balance=1000, reminder_days=2, currency='TRY',
+def add_card(client, statement_day=5, balance=1000, reminder_days=2, currency='TRY',
              card_name='Bonus', **extra):
     payload = {
         'bank_name': 'Garanti',
         'card_name': card_name,
-        'statement_day': 5,
-        'due_day': due_day,
+        'statement_day': statement_day,
         'current_balance': balance,
         'currency': currency,
         'reminder_days': reminder_days,
@@ -634,8 +757,8 @@ class TestDashboardCounts:
     """KOD2: unpaid_count / next_payment / toplam doğru hesaplanmalı."""
 
     def test_unpaid_count_counts_unpaid_only(self, auth_client):
-        for due_day in (10, 15, 20, 25, 30):
-            add_card(auth_client, due_day=due_day)
+        for statement_day in (10, 15, 20, 25, 30):
+            add_card(auth_client, statement_day=statement_day)
 
         dashboard = auth_client.get('/api/dashboard').get_json()
         assert dashboard['unpaid_count'] == 5
@@ -649,12 +772,17 @@ class TestDashboardCounts:
         assert dashboard['total_month'] == 4000.0
 
     def test_paid_card_is_not_next_payment(self, auth_client):
-        add_card(auth_client, due_day=30, card_name='Yakindaki')
-        add_card(auth_client, due_day=10, card_name='Uzaktaki')
+        from app.date_utils import get_today
+        today = get_today()
+        # Bu ayın 1'i geçmişse, 1'inde kesen kartın vadesi bir sonraki aya
+        # kayar. Bu yüzden her iki kart için de aynı ayı kullanan günler seçilir.
+        this_month = 1 if today.day < 12 else 20
+        add_card(auth_client, statement_day=this_month, card_name='Yakindaki')
+        add_card(auth_client, statement_day=this_month, card_name='Uzaktaki')
 
         upcoming = auth_client.get('/api/payments/upcoming').get_json()
-        nearest = upcoming[0]
-        auth_client.post(f"/api/payments/{nearest['payment_id']}/paid")
+        assert upcoming[0]['card_name'].endswith('Yakindaki')
+        auth_client.post(f"/api/payments/{upcoming[0]['payment_id']}/paid")
 
         dashboard = auth_client.get('/api/dashboard').get_json()
         assert dashboard['unpaid_count'] == 1
@@ -675,9 +803,9 @@ class TestPaymentsListing:
     """KOD3: Ödemeler sayfası vade tarihine göre listelenmeli, ay bazlı boş kalmamalı."""
 
     def test_payments_list_not_empty_for_rolled_over_cards(self, auth_client):
-        # due_day bu ayın içinde geçmiş -> vade bir sonraki aya kayar
-        for due_day in (1, 10, 15):
-            add_card(auth_client, due_day=due_day)
+        # Hesap kesim günü bu ayın içinde geçmiş -> vade bir sonraki aya kayar
+        for statement_day in (1, 5, 10):
+            add_card(auth_client, statement_day=statement_day)
 
         payments = auth_client.get('/api/payments').get_json()
         assert len(payments) > 0
@@ -695,8 +823,8 @@ class TestPaymentsListing:
         assert any(p['is_paid'] for p in payments)
 
     def test_payments_sorted_by_due_date(self, auth_client):
-        for due_day in (5, 25, 15):
-            add_card(auth_client, due_day=due_day)
+        for statement_day in (5, 25, 15):
+            add_card(auth_client, statement_day=statement_day)
 
         payments = auth_client.get('/api/payments').get_json()
         due_dates = [p['due_date'] for p in payments]
