@@ -1074,24 +1074,27 @@ class TestAppIcons:
             )
 
     def test_card_elements_present(self):
-        """Manyetik serit, cip ve beyaz detay cizilmis olmali."""
         _, _, pixels = _read_png(self._icon_dir() / 'icon-192.png')
-        stripe = sum(
+        dark_strip = sum(
             1 for row in pixels for p in row
-            if p[3] > 200 and abs(p[0] - 232) < 9 and abs(p[1] - 234) < 9
-            and abs(p[2] - 237) < 9
+            if p[3] > 200 and p[0] < 35 and p[1] < 45 and p[2] < 70
         )
         chip = sum(
             1 for row in pixels for p in row
-            if p[3] > 200 and 195 < p[0] < 252 and p[1] > 155 and p[2] < 150
+            if p[3] > 200 and 190 < p[0] < 255 and 100 < p[1] < 230 and p[2] < 120
         )
-        white = sum(
+        white_number = sum(
             1 for row in pixels for p in row
-            if p[3] > 200 and p[0] > 245 and p[1] > 245 and p[2] > 245
+            if p[3] > 200 and p[0] > 235 and p[1] > 235 and p[2] > 235
         )
-        assert stripe > 200, f'manyetik serit yok ({stripe} piksel)'
+        payment_logo = sum(
+            1 for row in pixels for p in row
+            if p[3] > 200 and p[0] > 220 and 70 < p[1] < 200 and p[2] < 100
+        )
+        assert dark_strip > 300, f'arka kart manyetik bandi yok ({dark_strip} piksel)'
         assert chip > 100, f'cip yok ({chip} piksel)'
-        assert white > 20, f'beyaz detay yok ({white} piksel)'
+        assert white_number > 1200, f'temsili kart numarasi yok ({white_number} piksel)'
+        assert payment_logo > 100, f'odeme logosu yok ({payment_logo} piksel)'
 
     def test_maskable_icons_are_fully_opaque(self):
         """Android maskesi saydam koseyi kirpar; maske ikonu dolu olmali."""
@@ -1141,7 +1144,6 @@ class TestAppIcons:
             )
 
     def test_maskable_details_contrast_with_card(self):
-        """Serit, cip ve beyaz detay kart uzerinde okunabilir olmali."""
         for name in ('icon-maskable-192', 'icon-maskable-512'):
             width, height, pixels = _read_png(self._icon_dir() / f'{name}.png')
             card = pixels[int(height * 0.70)][int(width * 0.50)][:3]
@@ -1155,17 +1157,14 @@ class TestAppIcons:
                 assert counts, f'{name}.png beklenen detay bulunamadi'
                 return max(counts, key=counts.get)
 
-            stripe = most_common(
-                lambda p: abs(p[0] - 232) < 10 and abs(p[1] - 234) < 10
-                and abs(p[2] - 237) < 10
-            )
-            chip = most_common(lambda p: 195 < p[0] < 252 and p[1] > 155 and p[2] < 150)
-            white = most_common(lambda p: min(p) > 245)
+            strip = most_common(lambda p: p[0] < 35 and p[1] < 45 and p[2] < 70)
+            chip = most_common(lambda p: 190 < p[0] < 255 and 100 < p[1] < 230 and p[2] < 120)
+            white = most_common(lambda p: p[0] > 235 and p[1] > 235 and p[2] > 235)
 
             for label, color, minimum in (
-                ('serit', stripe, 3.0),
-                ('cip', chip, 2.0),
-                ('beyaz', white, 3.0),
+                ('arka bant', strip, 2.0),
+                ('cip', chip, 1.5),
+                ('numara', white, 3.0),
             ):
                 ratio = self._contrast(color, card)
                 assert ratio >= minimum, (
@@ -1199,8 +1198,10 @@ class TestAppIcons:
         for icon in manifest['icons']:
             src = icon['src']
             assert src.startswith('/static/'), f"manifest yolu beklenmedik: {src}"
-            path = self._icon_dir().parent / src[len('/static/'):]
+            stripped = src.split('?')[0]
+            path = self._icon_dir().parent / stripped[len('/static/'):]
             assert path.exists(), f"manifest ikonu eksik: {src}"
+            assert '?v=' in src or '&v=' in src, f"manifest ikonu cache bust icermiyor: {src}"
 
 
 class TestServiceWorkerStaleness:
@@ -1219,12 +1220,11 @@ class TestServiceWorkerStaleness:
         return path.read_text(encoding='utf-8')
 
     def test_cache_name_bumped(self):
-        """Cache adı değişmeden eski varlıklar temizlenmez."""
         import re
         source = self._sw_source()
         match = re.search(r"CACHE_NAME\s*=\s*'([^']+)'", source)
         assert match, 'CACHE_NAME tanimli degil'
-        assert match.group(1) == 'kart-takip-v5', (
+        assert match.group(1) == 'kart-takip-v7', (
             f"Cache adi {match.group(1)}; varliklarin yenilenmesi icin artirilmali"
         )
 

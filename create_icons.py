@@ -1,33 +1,41 @@
-"""PWA ikonlarını Material Design 3 dilinde üretir.
-
-Harici bağımlılık kullanmaz; PNG'yi struct/zlib ile doğrudan yazar.
-M3 öğeleri: tonal renk geçişi, büyük yuvarlatılmış köşeler, contactless dalgası.
-"""
-
+import math
 import struct
 import zlib
 
-# Material 3 tonal palet (primary / primary container / surface variant)
-CARD_TOP = (42, 118, 234)
-CARD_BOTTOM = (11, 87, 208)
-# Maskable sürümde zemin CARD_TOP/CARD_BOTTOM ile doldurulduğu için kart
-# koyu lacivert kullanılır; aksi halde kart zeminde kaybolur.
-MASK_CARD_TOP = (16, 33, 58)
-MASK_CARD_BOTTOM = (7, 18, 34)
-STRIPE = (232, 234, 237)
-CHIP_TOP = (246, 211, 101)
-CHIP_BOTTOM = (217, 164, 65)
-CHIP_LINE = (150, 112, 30)
+BACKGROUND_TOP = (245, 248, 252)
+BACKGROUND_BOTTOM = (220, 229, 242)
+FRONT_TOP = (66, 165, 245)
+FRONT_BOTTOM = (18, 86, 180)
+BACK_TOP = (20, 72, 150)
+BACK_BOTTOM = (8, 35, 86)
+SHADOW = (15, 23, 42, 72)
+STRIP = (17, 24, 39)
+SIGNATURE = (245, 248, 255)
+CHIP_TOP = (251, 210, 95)
+CHIP_BOTTOM = (215, 143, 35)
+CHIP_LINE = (137, 86, 19)
 DETAIL = (255, 255, 255)
+ORANGE = (242, 118, 48)
+YELLOW = (252, 191, 54)
+SS = 2
 
-SS = 3  # supersampling katsayısı
+DIGITS = {
+    '0': 'abcdef',
+    '1': 'bc',
+    '2': 'abged',
+    '3': 'abgcd',
+    '4': 'fgbc',
+    '5': 'afgcd',
+    '6': 'afgecd',
+    '7': 'abc',
+    '8': 'abcdefg',
+    '9': 'abfgcd',
+}
 
 
 def _chunk(chunk_type, data):
     body = chunk_type + data
-    return struct.pack('>I', len(data)) + body + struct.pack(
-        '>I', zlib.crc32(body) & 0xFFFFFFFF
-    )
+    return struct.pack('>I', len(data)) + body + struct.pack('>I', zlib.crc32(body) & 0xFFFFFFFF)
 
 
 def _write_png(path, width, height, pixels):
@@ -36,7 +44,6 @@ def _write_png(path, width, height, pixels):
         raw += b'\x00'
         for r, g, b, a in pixels[y]:
             raw += bytes((r, g, b, a))
-
     png = b'\x89PNG\r\n\x1a\n'
     png += _chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0))
     png += _chunk(b'IDAT', zlib.compress(raw, 9))
@@ -46,15 +53,29 @@ def _write_png(path, width, height, pixels):
 
 
 def _lerp(c1, c2, t):
-    if t < 0.0:
-        t = 0.0
-    elif t > 1.0:
-        t = 1.0
+    t = max(0.0, min(1.0, t))
     return tuple(round(a + (b - a) * t) for a, b in zip(c1, c2))
 
 
+def _blend(dst, src):
+    sr, sg, sb, sa = src
+    if sa >= 255:
+        return sr, sg, sb, 255
+    dr, dg, db, da = dst
+    out_a = sa + da * (255 - sa) // 255
+    if out_a == 0:
+        return 0, 0, 0, 0
+    r = (sr * sa + dr * da * (255 - sa) // 255) // out_a
+    g = (sg * sa + dg * da * (255 - sa) // 255) // out_a
+    b = (sb * sa + db * da * (255 - sa) // 255) // out_a
+    return r, g, b, out_a
+
+
+def _rgba(color):
+    return color if len(color) == 4 else color + (255,)
+
+
 def _inside_round_rect(px, py, x0, y0, x1, y1, radius):
-    """Yuvarlatılmış dikdörtgenin içinde mi? Sürekli kenar testi."""
     if px < x0 or px > x1 or py < y0 or py > y1:
         return False
     cx = min(max(px, x0 + radius), x1 - radius)
@@ -64,30 +85,24 @@ def _inside_round_rect(px, py, x0, y0, x1, y1, radius):
     return dx * dx + dy * dy <= radius * radius
 
 
-def _inside_arc(px, py, cx, cy, radius, thickness, angle_min, angle_max):
-    """Yayın içinde mi? ( contactless dalgası için )"""
+def _inside_circle(px, py, cx, cy, radius):
+    return (px - cx) ** 2 + (py - cy) ** 2 <= radius * radius
+
+
+def _local(px, py, cx, cy, angle):
     dx = px - cx
     dy = py - cy
-    dist = (dx * dx + dy * dy) ** 0.5
-    if abs(dist - radius) > thickness / 2:
-        return False
-    if dist == 0:
-        return False
-    # -pi..pi aralığında açı; dalgalar sağa doğru açılır.
-    angle = _atan2(dy, dx)
-    half = (angle_max - angle_min) / 2
-    mid = (angle_max + angle_min) / 2
-    diff = (angle - mid + 3.141592653589793) % (2 * 3.141592653589793) - 3.141592653589793
-    return abs(diff) <= half
+    cos_a = math.cos(-angle)
+    sin_a = math.sin(-angle)
+    return dx * cos_a - dy * sin_a, dx * sin_a + dy * cos_a
 
 
-def _atan2(y, x):
-    import math
-    return math.atan2(y, x)
+def _inside_rot_round_rect(px, py, cx, cy, width, height, radius, angle):
+    lx, ly = _local(px, py, cx, cy, angle)
+    return _inside_round_rect(lx, ly, -width / 2, -height / 2, width / 2, height / 2, radius)
 
 
 def _paint(canvas, y0, y1, x0, x1, test, color_fn):
-    """Yalnızca verilen sınırlar içindeki pikselleri sırayla boyar."""
     out_w = len(canvas)
     for y in range(max(0, int(y0)), min(out_w, int(y1) + 1)):
         py = y + 0.5
@@ -97,138 +112,143 @@ def _paint(canvas, y0, y1, x0, x1, test, color_fn):
             if test(px, py):
                 color = color_fn(px, py)
                 if color is not None:
-                    row[x] = (color[0], color[1], color[2], 255)
+                    row[x] = _blend(row[x], _rgba(color))
+
+
+def _paint_round(canvas, x0, y0, x1, y1, radius, color):
+    _paint(
+        canvas, y0, y1, x0, x1,
+        lambda px, py: _inside_round_rect(px, py, x0, y0, x1, y1, radius),
+        lambda px, py: color,
+    )
+
+
+def _paint_card(canvas, cx, cy, width, height, radius, angle, top, bottom):
+    pad = max(width, height)
+    _paint(
+        canvas, cy - pad, cy + pad, cx - pad, cx + pad,
+        lambda px, py: _inside_rot_round_rect(px, py, cx, cy, width, height, radius, angle),
+        lambda px, py: _lerp(top, bottom, (_local(px, py, cx, cy, angle)[1] + height / 2) / height),
+    )
+
+
+def _paint_rot_local_rect(canvas, cx, cy, width, height, angle, lx0, ly0, lx1, ly1, radius, color):
+    pad = max(width, height)
+    def test(px, py):
+        lx, ly = _local(px, py, cx, cy, angle)
+        return _inside_round_rect(lx, ly, lx0, ly0, lx1, ly1, radius)
+    _paint(canvas, cy - pad, cy + pad, cx - pad, cx + pad, test, lambda px, py: color)
+
+
+def _draw_digit(canvas, x0, y0, width, height, digit, color):
+    thick = max(width * 0.18, height * 0.10)
+    radius = thick / 2
+    x1 = x0 + width
+    y1 = y0 + height
+    ym = y0 + height / 2
+    specs = {
+        'a': (x0 + thick, y0, x1 - thick, y0 + thick),
+        'b': (x1 - thick, y0 + thick, x1, ym - thick / 2),
+        'c': (x1 - thick, ym + thick / 2, x1, y1 - thick),
+        'd': (x0 + thick, y1 - thick, x1 - thick, y1),
+        'e': (x0, ym + thick / 2, x0 + thick, y1 - thick),
+        'f': (x0, y0 + thick, x0 + thick, ym - thick / 2),
+        'g': (x0 + thick, ym - thick * 0.45, x1 - thick, ym + thick * 0.45),
+    }
+    for segment in DIGITS[digit]:
+        sx0, sy0, sx1, sy1 = specs[segment]
+        _paint_round(canvas, sx0, sy0, sx1, sy1, radius, color)
+
+
+def _draw_card_number(canvas, card_x0, card_y0, card_w, card_h):
+    groups = ['0123', '4567', '8910', '1112']
+    y0 = card_y0 + card_h * 0.66
+    digit_h = card_h * 0.13
+    group_w = card_w * 0.17
+    group_gap = card_w * 0.055
+    start_x = card_x0 + card_w * 0.105
+    digit_gap = group_w * 0.065
+    digit_w = (group_w - digit_gap * 3) / 4
+    for group_index, group in enumerate(groups):
+        x = start_x + group_index * (group_w + group_gap)
+        for digit in group:
+            _draw_digit(canvas, x, y0, digit_w, digit_h, digit, DETAIL)
+            x += digit_w + digit_gap
 
 
 def _draw_icon(size, maskable=False):
     scale = size * SS
-    out_w = size * SS
-    canvas = [[(0, 0, 0, 0) for _ in range(out_w)] for _ in range(out_w)]
+    canvas = [[(0, 0, 0, 0) for _ in range(scale)] for _ in range(scale)]
 
     if maskable:
-        # Android maskesi kenarı kırpar; içerik dairenin içinde kalmalı.
-        # Zemin mavi olduğu için kart açık renkte olmalı, yoksa kart
-        # zeminle aynı görünür ve ikon düz bir mavi kareye dönüşür.
-        for y in range(out_w):
+        for y in range(scale):
             row = canvas[y]
-            for x in range(out_w):
-                t = (y + 0.5) / out_w
-                row[x] = _lerp(CARD_TOP, CARD_BOTTOM, t) + (255,)
-
-        card_top, card_bottom = MASK_CARD_TOP, MASK_CARD_BOTTOM
-        shrink = 0.72
-        cx, cy = 0.5 * scale, 0.5 * scale
-        half = 0.5 * shrink * scale
-        card_x0, card_x1 = cx - half, cx + half
-        card_y0, card_y1 = cy - half * 0.62, cy + half * 0.62
-        card_r = 0.055 * scale
+            for x in range(scale):
+                vertical = (y + 0.5) / scale
+                radial = (((x + 0.5 - scale / 2) ** 2 + (y + 0.5 - scale / 2) ** 2) ** 0.5) / (scale * 0.72)
+                row[x] = _lerp(BACKGROUND_TOP, BACKGROUND_BOTTOM, vertical * 0.62 + radial * 0.38) + (255,)
     else:
-        card_top, card_bottom = CARD_TOP, CARD_BOTTOM
-        # M3 "large" köşe yarıçapı; ölçüler dairesel maskeye de sığacak şekilde.
-        card_x0, card_x1 = 0.15 * scale, 0.85 * scale
-        card_y0, card_y1 = 0.30 * scale, 0.70 * scale
-        card_r = 0.08 * scale
-
-    card_w = card_x1 - card_x0
-    card_h = card_y1 - card_y0
-    card_mid_x = (card_x0 + card_x1) / 2
-    card_mid_y = (card_y0 + card_y1) / 2
-
-    # Dikey yerleşim: serit kartın üst kenarına yakın, çip orta-altta,
-    # numara çizgisi en altta; her biri kart içinde eşit boşluk bırakır.
-    stripe_h = 0.11 * card_h
-    stripe_y0 = card_y0 + 0.145 * card_h
-    stripe_y1 = stripe_y0 + stripe_h
-    stripe_x0, stripe_x1 = card_x0 + 0.03 * card_w, card_x1 - 0.03 * card_w
-    stripe_r = stripe_h / 2
-
-    chip_h = 0.24 * card_h
-    chip_w = 0.105 * card_w
-    chip_x0, chip_x1 = card_x0 + 0.095 * card_w, card_x0 + 0.095 * card_w + chip_w
-    chip_y0, chip_y1 = card_y0 + 0.39 * card_h, card_y0 + 0.39 * card_h + chip_h
-    chip_r = chip_h * 0.24
-
-    # Kart numarası yerine geçen beyaz çizgi, çip ile sol kenar arasında.
-    text_h = 0.038 * card_h
-    text_x0 = card_x0 + 0.125 * card_w
-    text_x1 = text_x0 + 0.34 * card_w
-    text_y0 = card_y0 + 0.79 * card_h
-    text_y1 = text_y0 + text_h
-
-    # Kart gövdesi: dikey tonal geçiş.
-    _paint(
-        canvas, card_y0, card_y1, card_x0, card_x1,
-        lambda px, py: _inside_round_rect(
-            px, py, card_x0, card_y0, card_x1, card_y1, card_r
-        ),
-        lambda px, py: _lerp(
-            card_top, card_bottom, (py - card_y0) / (card_y1 - card_y0)
-        ),
-    )
-
-    # Manyetik şerit: kart yüzeyine hafif gömülü, yuvarlatılmış uçlar.
-    _paint(
-        canvas, stripe_y0, stripe_y1, stripe_x0, stripe_x1,
-        lambda px, py: _inside_round_rect(
-            px, py, stripe_x0, stripe_y0, stripe_x1, stripe_y1, stripe_r
-        ),
-        lambda px, py: STRIPE,
-    )
-
-    # Çip: altın tonal geçiş, yuvarlatılmış köşeli M3 yüzeyi.
-    def chip_test(px, py):
-        return _inside_round_rect(
-            px, py, chip_x0, chip_y0, chip_x1, chip_y1, chip_r
-        )
-
-    def chip_color(px, py):
-        color = _lerp(
-            CHIP_TOP, CHIP_BOTTOM, (py - chip_y0) / (chip_y1 - chip_y0)
-        )
-        mid_x = (chip_x0 + chip_x1) / 2
-        mid_y = (chip_y0 + chip_y1) / 2
-        if abs(px - mid_x) < chip_w * 0.07 or abs(py - mid_y) < chip_h * 0.07:
-            return CHIP_LINE
-        return color
-
-    _paint(canvas, chip_y0, chip_y1, chip_x0, chip_x1, chip_test, chip_color)
-
-    # Kartın sağ altında contactless (NFC) dalgası: ödeme çağrışımı.
-    # Merkez kartın sağ kenarından en az yarıçap kadar içeride olmalı, yoksa
-    # yay kart dışına taşar.
-    wave_thickness = card_h * 0.026
-    wave_outer = card_h * 0.115
-    wave_cx = card_x1 - wave_outer - card_w * 0.06
-    wave_cy = card_y0 + card_h * 0.545
-    for radius in (wave_outer * 0.57, wave_outer):
+        x0, x1 = 0.04 * scale, 0.96 * scale
+        y0, y1 = 0.04 * scale, 0.96 * scale
         _paint(
-            canvas,
-            wave_cy - radius, wave_cy + radius,
-            wave_cx - radius, wave_cx + radius,
-            lambda px, py, r=radius, t=wave_thickness: (
-                _inside_round_rect(
-                    px, py, card_x0, card_y0, card_x1, card_y1, card_r
-                )
-                and _inside_arc(px, py, wave_cx, wave_cy, r, t, -0.9, 0.9)
-            ),
-            lambda px, py: DETAIL,
+            canvas, y0, y1, x0, x1,
+            lambda px, py: _inside_round_rect(px, py, x0, y0, x1, y1, 0.20 * scale),
+            lambda px, py: _lerp(BACKGROUND_TOP, BACKGROUND_BOTTOM, (py - y0) / (y1 - y0)),
         )
 
-    # Kartın sol altında kart numarası yerine geçen beyaz çizgi.
+    if maskable:
+        front_x0, front_x1 = 0.14 * scale, 0.90 * scale
+        front_y0, front_y1 = 0.33 * scale, 0.81 * scale
+        back_cx, back_cy = 0.47 * scale, 0.40 * scale
+        back_w, back_h = 0.63 * scale, 0.40 * scale
+    else:
+        front_x0, front_x1 = 0.11 * scale, 0.91 * scale
+        front_y0, front_y1 = 0.33 * scale, 0.83 * scale
+        back_cx, back_cy = 0.48 * scale, 0.39 * scale
+        back_w, back_h = 0.68 * scale, 0.43 * scale
+
+    front_w = front_x1 - front_x0
+    front_h = front_y1 - front_y0
+    front_r = 0.055 * scale
+    back_r = 0.05 * scale
+    back_angle = -0.20
+
+    _paint_card(canvas, back_cx + 0.014 * scale, back_cy + 0.024 * scale, back_w, back_h, back_r, back_angle, SHADOW[:3], SHADOW[:3])
+    _paint_card(canvas, back_cx, back_cy, back_w, back_h, back_r, back_angle, BACK_TOP, BACK_BOTTOM)
+    _paint_rot_local_rect(canvas, back_cx, back_cy, back_w, back_h, back_angle, -back_w * 0.50, -back_h * 0.22, back_w * 0.50, -back_h * 0.06, 0, STRIP)
+    _paint_rot_local_rect(canvas, back_cx, back_cy, back_w, back_h, back_angle, -back_w * 0.36, back_h * 0.08, back_w * 0.26, back_h * 0.24, back_h * 0.035, SIGNATURE)
+
+    _paint_round(canvas, front_x0 + 0.016 * scale, front_y0 + 0.024 * scale, front_x1 + 0.016 * scale, front_y1 + 0.024 * scale, front_r, SHADOW)
     _paint(
-        canvas, text_y0, text_y1, text_x0, text_x1,
-        lambda px, py: (
-            _inside_round_rect(
-                px, py, card_x0, card_y0, card_x1, card_y1, card_r
-            )
-            and _inside_round_rect(
-                px, py, text_x0, text_y0, text_x1, text_y1, text_h / 2
-            )
-        ),
-        lambda px, py: DETAIL,
+        canvas, front_y0, front_y1, front_x0, front_x1,
+        lambda px, py: _inside_round_rect(px, py, front_x0, front_y0, front_x1, front_y1, front_r),
+        lambda px, py: _lerp(FRONT_TOP, FRONT_BOTTOM, (py - front_y0) / front_h),
     )
 
-    # 4x4 yerine SSxSS blok ortalamasıyla alfa kenar yumuşatma.
+    chip_x0 = front_x0 + front_w * 0.105
+    chip_y0 = front_y0 + front_h * 0.28
+    chip_x1 = chip_x0 + front_w * 0.16
+    chip_y1 = chip_y0 + front_h * 0.27
+    _paint(
+        canvas, chip_y0, chip_y1, chip_x0, chip_x1,
+        lambda px, py: _inside_round_rect(px, py, chip_x0, chip_y0, chip_x1, chip_y1, (chip_y1 - chip_y0) * 0.18),
+        lambda px, py: _lerp(CHIP_TOP, CHIP_BOTTOM, (py - chip_y0) / (chip_y1 - chip_y0)),
+    )
+    line_t = (chip_y1 - chip_y0) * 0.08
+    _paint_round(canvas, chip_x0 + (chip_x1 - chip_x0) * 0.45, chip_y0, chip_x0 + (chip_x1 - chip_x0) * 0.55, chip_y1, line_t, CHIP_LINE)
+    _paint_round(canvas, chip_x0, chip_y0 + (chip_y1 - chip_y0) * 0.45, chip_x1, chip_y0 + (chip_y1 - chip_y0) * 0.55, line_t, CHIP_LINE)
+
+    logo_r = front_h * 0.105
+    logo_y = front_y0 + front_h * 0.23
+    left_cx = front_x1 - front_w * 0.20
+    right_cx = left_cx + logo_r * 1.15
+    _paint(canvas, logo_y - logo_r, logo_y + logo_r, left_cx - logo_r, right_cx + logo_r, lambda px, py: _inside_circle(px, py, left_cx, logo_y, logo_r), lambda px, py: ORANGE)
+    _paint(canvas, logo_y - logo_r, logo_y + logo_r, left_cx - logo_r, right_cx + logo_r, lambda px, py: _inside_circle(px, py, right_cx, logo_y, logo_r), lambda px, py: YELLOW)
+
+    _draw_card_number(canvas, front_x0, front_y0, front_w, front_h)
+    _paint_round(canvas, front_x0 + front_w * 0.11, front_y0 + front_h * 0.84, front_x0 + front_w * 0.36, front_y0 + front_h * 0.885, front_h * 0.02, DETAIL)
+    _paint_round(canvas, front_x0 + front_w * 0.68, front_y0 + front_h * 0.84, front_x0 + front_w * 0.83, front_y0 + front_h * 0.885, front_h * 0.02, DETAIL)
+
     final = []
     total = SS * SS
     for y in range(size):

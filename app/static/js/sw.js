@@ -1,9 +1,12 @@
-const CACHE_NAME = 'kart-takip-v5';
+const CACHE_NAME = 'kart-takip-v7';
+const ICON_192 = '/static/icons/icon-192.png?v=7';
 const urlsToCache = [
     '/static/css/style.css',
     '/static/js/app.js',
-    '/static/icons/icon-192.png',
-    '/static/icons/icon-512.png',
+    ICON_192,
+    '/static/icons/icon-512.png?v=7',
+    '/static/icons/icon-maskable-192.png?v=7',
+    '/static/icons/icon-maskable-512.png?v=7',
     '/static/sounds/notification.wav'
 ];
 
@@ -94,8 +97,8 @@ self.addEventListener('push', event => {
 
     const options = {
         body: data.body,
-        icon: '/static/icons/icon-192.png',
-        badge: '/static/icons/icon-192.png',
+        icon: ICON_192,
+        badge: ICON_192,
         vibrate: [500, 200, 500, 200, 500],
         tag: 'kart-takip-' + Date.now(),
         renotify: true,
