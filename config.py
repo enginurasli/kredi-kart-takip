@@ -1,4 +1,5 @@
 import os
+from datetime import date, datetime
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 INSTANCE_DIR = os.path.join(BASE_DIR, 'instance')
@@ -40,4 +41,8 @@ class Config:
     VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY")
 
 
-APP_VERSION = os.environ.get("APP_VERSION", "16102026")
+# Uygulama sürümü. Aynı gün birden çok dağıtım yapılıyorsa ortam
+# değişkeni APP_VERSION ile tam sürüm belirlenebilir; ayarlanmazsa
+# gün + saat (GGAAYYYY-HHMM) otomatik kullanılır.
+_env_version = os.environ.get("APP_VERSION", "").strip()
+APP_VERSION = _env_version or f"{date.today().strftime('%d%m%Y')}-{datetime.now().strftime('%H%M')}"
