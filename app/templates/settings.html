@@ -146,14 +146,12 @@ async function requestNotificationPermission() {
         const reg = await navigator.serviceWorker.ready;
         const existing = await reg.pushManager.getSubscription();
         if (existing) {
-            await fetch('/api/subscribe', {
+            await existing.unsubscribe();
+            await fetch('/api/unsubscribe', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ subscription: existing, device_name: getDeviceName() })
+                body: JSON.stringify({ endpoint: existing.endpoint })
             });
-            alert('Bildirim aboneliğiniz zaten aktif.');
-            loadSettings();
-            return;
         }
         const res = await fetch('/api/vapid-public-key');
         const data = await res.json();
@@ -166,7 +164,7 @@ async function requestNotificationPermission() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ subscription, device_name: getDeviceName() })
         });
-        alert('Bildirim izni ve cihaz aboneliği oluşturuldu.');
+        alert('Bildirim aboneliğiniz yenilendi ve aktif edildi.');
         loadSettings();
     } catch (err) {
         console.error('Bildirim aboneliği hatası:', err);
