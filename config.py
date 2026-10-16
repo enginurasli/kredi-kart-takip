@@ -38,3 +38,6 @@ class Config:
     # VAPID anahtarları diskte kalıcı değilse ortam değişkenlerinden okunur.
     VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY")
     VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY")
+
+
+APP_VERSION = os.environ.get("APP_VERSION", "16102026")

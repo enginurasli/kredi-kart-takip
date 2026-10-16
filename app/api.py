@@ -21,6 +21,7 @@ from app.notifications import (
 )
 from app.push_notifications import send_to_all_user_devices
 from app.vapid_keys import get_public_key
+from config import APP_VERSION
 
 api_bp = Blueprint("api", __name__)
 
@@ -357,6 +358,7 @@ def get_settings():
         "currency": setting.currency,
         "notification_sound": setting.notification_sound,
         "theme": setting.theme,
+        "version": APP_VERSION,
     })
 
 
