@@ -359,6 +359,9 @@ def get_settings():
         "notification_sound": setting.notification_sound,
         "theme": setting.theme,
         "version": APP_VERSION,
+        "active_device_count": Device.query.filter_by(
+            user_id=current_user.id, is_active=True
+        ).count(),
     })
 
 
